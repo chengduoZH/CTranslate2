@@ -18,6 +18,14 @@ target_link_libraries(ctranslate2_test
   gtest_main
   )
 
+add_executable(bert_test
+        bert_test.cc
+        test.cc)
+target_link_libraries(bert_test
+        ${PROJECT_NAME}
+        gtest_main
+        )
+
 add_executable(benchmark_ops
   benchmark_ops.cc
   )

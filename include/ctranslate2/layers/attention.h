@@ -16,14 +16,15 @@ namespace ctranslate2 {
                          const std::string& scope,
                          dim_t num_heads,
                          bool self_attention);
-      void operator()(const StorageView& queries,
+      virtual void operator()(const StorageView& queries,
                       const StorageView* memory,
                       const StorageView* memory_lengths,
                       StorageView& output,
                       StorageView* cached_keys = nullptr,
                       StorageView* cached_values = nullptr,
                       StorageView* attention = nullptr) const;
-    private:
+
+    public:
       const dim_t _num_heads;
       const std::vector<Dense> _linear;
       const LayerNorm _layer_norm;
@@ -34,6 +35,18 @@ namespace ctranslate2 {
 
       void split_heads(const StorageView& x, StorageView& y) const;
       void combine_heads(const StorageView& x, StorageView& y) const;
+    };
+
+    class BertMultiHeadAttention: public MultiHeadAttention{
+      using MultiHeadAttention::MultiHeadAttention;
+    public:
+      void operator()(const StorageView& queries,
+                              const StorageView* memory,
+                              const StorageView* memory_lengths,
+                              StorageView& output,
+                              StorageView* cached_keys = nullptr,
+                              StorageView* cached_values = nullptr,
+                              StorageView* attention = nullptr) const override;
     };
 
   }

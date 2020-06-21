@@ -74,6 +74,7 @@ set(SOURCES
   src/models/model.cc
   src/models/sequence_to_sequence.cc
   src/models/transformer.cc
+  src/models/bert.cc
   src/ops/add.cc
   src/ops/min_max.cc
   src/ops/concat.cc
@@ -106,6 +107,7 @@ set(SOURCES
   src/storage_view.cc
   src/translation_result.cc
   src/translator.cc
+  src/bert_model.cc
   src/translator_pool.cc
   src/types.cc
   src/utils.cc
@@ -150,7 +152,7 @@ if(NOT OPENMP_RUNTIME STREQUAL "NONE")
 
   if(OPENMP_RUNTIME STREQUAL "INTEL")
     # Find Intel libraries.
-    find_library(IOMP5_LIBRARY iomp5 libiomp5md HINTS ${INTEL_ROOT}/lib/intel64 ${INTEL_ROOT}/compiler/lib/intel64)
+    find_library(IOMP5_LIBRARY iomp5 libiomp5md HINTS ${INTEL_ROOT}/lib/intel64 ${INTEL_ROOT}/compiler/lib/intel64 ${CONDA_PREFIX}/lib/)
     if(IOMP5_LIBRARY)
       list(APPEND LIBRARIES ${IOMP5_LIBRARY})
       message(STATUS "Using OpenMP: ${IOMP5_LIBRARY}")
@@ -174,7 +176,7 @@ if(WITH_MKL)
                                    DOC "Path to MKL root directory")
 
   # Find MKL includes.
-  find_path(MKL_INCLUDE_DIR NAMES mkl.h HINTS ${MKL_ROOT}/include/)
+  find_path(MKL_INCLUDE_DIR NAMES mkl.h HINTS ${MKL_ROOT}/include/ ${CONDA_PREFIX}/include/)
   if(MKL_INCLUDE_DIR)
     message(STATUS "Found MKL include directory: ${MKL_INCLUDE_DIR}")
   else()
@@ -182,7 +184,7 @@ if(WITH_MKL)
   endif()
 
   # Find MKL libraries.
-  find_library(MKL_CORE_LIBRARY NAMES mkl_core PATHS ${MKL_ROOT}/lib/intel64)
+  find_library(MKL_CORE_LIBRARY NAMES mkl_core PATHS ${MKL_ROOT}/lib/intel64 ${CONDA_PREFIX}/lib)
   if(MKL_CORE_LIBRARY)
     get_filename_component(MKL_LIBRARY_DIR ${MKL_CORE_LIBRARY} DIRECTORY)
     message(STATUS "Found MKL library directory: ${MKL_LIBRARY_DIR}")
@@ -196,6 +198,11 @@ if(WITH_MKL)
       ${MKL_LIBRARY_DIR}/mkl_core.lib
       ${MKL_LIBRARY_DIR}/mkl_intel_ilp64.lib
       )
+  elseif(APPLE)
+    set(MKL_LIBRARIES
+      ${MKL_LIBRARY_DIR}/libmkl_core.dylib
+      ${MKL_LIBRARY_DIR}/libmkl_intel_ilp64.dylib
+      )
   else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m64")
     set(MKL_LIBRARIES
@@ -207,18 +214,24 @@ if(WITH_MKL)
   if(OPENMP_RUNTIME STREQUAL "INTEL")
     if(WIN32)
       list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/mkl_intel_thread.lib)
+    elseif(APPLE)
+      list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/libmkl_intel_thread.dylib)
     else()
       list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/libmkl_intel_thread.a)
     endif()
   elseif(OPENMP_RUNTIME STREQUAL "COMP")
     if(WIN32)
       message(FATAL_ERROR "Building with MKL requires Intel OpenMP")
+    elseif()
+      list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/libmkl_gnu_thread.dylib)
     else()
       list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/libmkl_gnu_thread.a)
     endif()
   elseif(OPENMP_RUNTIME STREQUAL "NONE")
     if(WIN32)
       list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/mkl_sequential.lib)
+    elseif(APPLE)
+      list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/libmkl_sequential.dylib)
     else()
       list(APPEND MKL_LIBRARIES ${MKL_LIBRARY_DIR}/libmkl_sequential.a)
     endif()

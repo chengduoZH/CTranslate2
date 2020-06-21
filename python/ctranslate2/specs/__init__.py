@@ -5,3 +5,4 @@ from ctranslate2.specs.catalog import TransformerBigRelative
 from ctranslate2.specs.model_spec import LayerSpec
 from ctranslate2.specs.model_spec import ModelSpec
 from ctranslate2.specs.transformer_spec import TransformerSpec
+from ctranslate2.specs.bert_spec import BertSpec

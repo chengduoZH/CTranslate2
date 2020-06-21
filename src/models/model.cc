@@ -1,5 +1,5 @@
 #include "ctranslate2/models/model.h"
-
+#include "bert/model/bert.h"
 #include <fstream>
 
 #include "ctranslate2/models/transformer.h"
@@ -411,6 +411,8 @@ namespace ctranslate2 {
         model = new TransformerModel(path, spec_revision, /*num_heads=*/16);
       else if (spec == "TransformerSpec")
         model = new TransformerModel(path, spec_revision);
+      else if (spec == "BertSpec")
+        model = new bert::models::BertModel(path, spec_revision);
       else
         throw std::invalid_argument("Unsupported model spec " + spec);
 
