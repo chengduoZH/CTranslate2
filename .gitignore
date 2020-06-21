@@ -6,3 +6,11 @@ CMake*.json
 python/build/
 python/ctranslate2.egg-info/
 python/dist/
+cmake-build-debug/
+release
+pytorch_model.bin
+model.bin
+python/torch_model/tmp/*
+python/torch_model/*
+python/tests/bert_model/*
+

@@ -2,6 +2,7 @@
 
 #include <ostream>
 #include <vector>
+#include <iostream>
 
 #include "types.h"
 #include "utils.h"
@@ -249,4 +250,16 @@ namespace ctranslate2 {
 
   };
 
+template<typename T>
+void PrintStorage(const StorageView &input, std::string info) {
+  auto vec = input.to_vector<T>();
+  T sum = std::accumulate(vec.begin(), vec.end(), static_cast<T>(0), [](T a, T b) -> T {
+  return std::abs(a) + std::abs(b);
+  });
+  std::cout << info << "\n" << sum <<  std::endl;
+  for (size_t i = 0; i < vec.size() && i < 100; i++) {
+    std::cout << vec[i] << ", ";
+  }
+  std::cout << std::endl;
+}
 }

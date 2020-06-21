@@ -67,6 +67,7 @@ setup(
         "console_scripts": [
             "ct2-opennmt-py-converter=ctranslate2.bin.opennmt_py_converter:main",
             "ct2-opennmt-tf-converter=ctranslate2.bin.opennmt_tf_converter:main",
+            "transformers-converter=ctranslate2.bin.transformers_converter:main",
         ],
     }
 )

@@ -5,51 +5,29 @@
 
 #include "ctranslate2/ops/ops.h"
 #include "ctranslate2/models/model.h"
+#include "ctranslate2/layers/attention.h"
+#include "ctranslate2/models/transformer.h"
 
-namespace ctranslate2 {
-class Embeddings {
+namespace bert {
+
+using namespace ctranslate2;
+
+class Bert {
 public:
-  Embeddings(const models::Model &model, const std::string &scope);
+  Bert(const std::string &model_dir,
+       Device device = Device::CPU,
+       int device_index = 0,
+       ComputeType compute_type = ComputeType::DEFAULT);
 
-  void operator()(const StorageView &ids, StorageView &output) const;
+  std::vector<std::vector<std::vector<float>>>  operator()(const std::vector<std::vector<size_t >> &input,
+                                             const std::vector<std::vector<size_t>> &token_type_ids) const;
+
+  void set_model(const std::shared_ptr<const ctranslate2::models::Model> &model);
 
 private:
-  const ops::Gather _gather_op;
-  const StorageView &_embeddings;
-  const StorageView *_qscale;
-  const std::unique_ptr<const StorageView> _scale;
-};
-
-class LayerNorm {
-public:
-  LayerNorm(const models::Model &model, const std::string &scope);
-
-  void operator()(const StorageView &input, StorageView &output) const;
-
-private:
-  const ops::LayerNorm norm_op_;
-  const StorageView &beta_;
-  const StorageView &gamma_;
+  std::shared_ptr<const ctranslate2::models::Model> _model;
+  std::unique_ptr<layers::Encoder> _encoder;
 };
 
 
-class EncoderLayer {
-
-};
-
-class BartEncoder {
-
-};
-
-class SelfAttention {
-
-};
-
-class BartModel {
-
-};
-
-class BartClassificationHead {
-
-};
 }

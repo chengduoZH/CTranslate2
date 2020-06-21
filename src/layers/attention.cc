@@ -234,5 +234,86 @@ namespace ctranslate2 {
       y.reshape({y.dim(0), y.dim(1), y.dim(-1) * _num_heads});
     }
 
+  void BertMultiHeadAttention::operator()(const ctranslate2::StorageView &queries, const ctranslate2::StorageView *memory,
+                                          const ctranslate2::StorageView *memory_lengths,
+                                          ctranslate2::StorageView &output, ctranslate2::StorageView *cached_keys,
+                                          ctranslate2::StorageView *cached_values,
+                                          ctranslate2::StorageView *attention) const {
+    PROFILE("MultiHeadAttention");
+    Device device = queries.device();
+    StorageView fused_proj(device);
+    StorageView queries_proj(device);
+    StorageView keys_proj(device);
+    StorageView values_proj(device);
+    StorageView split_queries(device);
+    StorageView split_keys(device);
+    StorageView split_values(device);
+
+    queries_proj = queries;
+//  _layer_norm(queries, queries_proj);
+    _linear[0](queries_proj, fused_proj);
+
+    if (memory) {
+      split_heads(fused_proj, split_queries);
+      if (cached_keys == nullptr || cached_keys->empty()) {
+        _linear[1](*memory, fused_proj);
+        ops::Split(-1)(fused_proj, keys_proj, values_proj);
+        split_heads(keys_proj, split_keys);
+        split_heads(values_proj, split_values);
+
+        if (cached_keys != nullptr) {
+          swap(*cached_keys, split_keys);
+          swap(*cached_values, split_values);
+          split_keys.shallow_copy(*cached_keys);
+          split_values.shallow_copy(*cached_values);
+        }
+      } else {
+        split_keys.shallow_copy(*cached_keys);
+        split_values.shallow_copy(*cached_values);
+      }
+    } else {
+      ops::Split(-1)(fused_proj, queries_proj, keys_proj, values_proj);
+      split_heads(queries_proj, split_queries);
+      split_heads(keys_proj, split_keys);
+      split_heads(values_proj, split_values);
+
+      if (cached_keys != nullptr) {
+        if (cached_keys->empty()) {
+          swap(*cached_keys, split_keys);
+          swap(*cached_values, split_values);
+        } else {
+          StorageView &tmp = keys_proj;  // Reuse storage.
+          swap(*cached_keys, tmp);
+          ops::Concat(2)({&tmp, &split_keys}, *cached_keys);
+          swap(*cached_values, tmp);
+          ops::Concat(2)({&tmp, &split_values}, *cached_values);
+        }
+        split_keys.shallow_copy(*cached_keys);
+        split_values.shallow_copy(*cached_values);
+      }
+    }
+
+    const dim_t dk = queries.dim(-1) / _num_heads;
+    const float queries_scale = 1.0 / sqrt(dk);
+
+    StorageView &context = queries_proj;  // Reuse storage.
+    dot_product_attention(split_queries,
+                          split_keys,
+                          split_values,
+                          memory_lengths,
+                          _relative_position_keys,
+                          _relative_position_values,
+                          _maximum_relative_position,
+                          context,
+                          attention,
+                          queries_scale,
+                          bool(cached_keys));
+
+    StorageView &combined = values_proj;  // Reuse storage.
+    combine_heads(context, combined);
+    _linear.back()(combined, output);
+    ops::Add()(queries, output, output);
+    _layer_norm(output, output);
+  }
   }
 }
