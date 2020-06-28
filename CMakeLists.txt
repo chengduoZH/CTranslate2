@@ -152,7 +152,7 @@ if(NOT OPENMP_RUNTIME STREQUAL "NONE")
 
   if(OPENMP_RUNTIME STREQUAL "INTEL")
     # Find Intel libraries.
-    find_library(IOMP5_LIBRARY iomp5 libiomp5md HINTS ${INTEL_ROOT}/lib/intel64 ${INTEL_ROOT}/compiler/lib/intel64 /opt/miniconda3/lib/)
+    find_library(IOMP5_LIBRARY iomp5 libiomp5md HINTS ${INTEL_ROOT}/lib/intel64 ${INTEL_ROOT}/compiler/lib/intel64 ${CONDA_PREFIX}/lib/)
     if(IOMP5_LIBRARY)
       list(APPEND LIBRARIES ${IOMP5_LIBRARY})
       message(STATUS "Using OpenMP: ${IOMP5_LIBRARY}")
@@ -176,7 +176,7 @@ if(WITH_MKL)
                                    DOC "Path to MKL root directory")
 
   # Find MKL includes.
-  find_path(MKL_INCLUDE_DIR NAMES mkl.h HINTS ${MKL_ROOT}/include/ /opt/miniconda3/include/)
+  find_path(MKL_INCLUDE_DIR NAMES mkl.h HINTS ${MKL_ROOT}/include/ ${CONDA_PREFIX}/include/)
   if(MKL_INCLUDE_DIR)
     message(STATUS "Found MKL include directory: ${MKL_INCLUDE_DIR}")
   else()
@@ -184,7 +184,7 @@ if(WITH_MKL)
   endif()
 
   # Find MKL libraries.
-  find_library(MKL_CORE_LIBRARY NAMES mkl_core PATHS ${MKL_ROOT}/lib/intel64 /opt/miniconda3/lib)
+  find_library(MKL_CORE_LIBRARY NAMES mkl_core PATHS ${MKL_ROOT}/lib/intel64 ${CONDA_PREFIX}/lib)
   if(MKL_CORE_LIBRARY)
     get_filename_component(MKL_LIBRARY_DIR ${MKL_CORE_LIBRARY} DIRECTORY)
     message(STATUS "Found MKL library directory: ${MKL_LIBRARY_DIR}")
