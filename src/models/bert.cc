@@ -55,7 +55,7 @@ bool BertModel::is_quantizable(const std::string &variable_name) const {
 
 bool BertModel::is_linear_weight(const std::string &variable_name) const {
   // Linear weights are all variables that are quantizable and not under the "embeddings" scope.
-  return is_quantizable(variable_name) && variable_name.find("embeddings") == std::string::npos;
+  return is_quantizable(variable_name) && !(variable_name.find("embeddings") != std::string::npos || variable_name.find("token_type_encodings") != std::string::npos);
 }
 
 bool BertModel::is_packable(const std::string &variable_name) const {
