@@ -14,6 +14,10 @@ Bert::Bert(const std::string &model_dir,
   set_model(ctranslate2::models::Model::load(model_dir, device, device_index, compute_type));
 }
 
+Bert::Bert(const std::shared_ptr<const ctranslate2::models::Model>& model) {
+  set_model(model);
+}
+
 void Bert::set_model(const std::shared_ptr<const ctranslate2::models::Model> &model) {
   const auto *bert_model = dynamic_cast<const models::BertModel *>(model.get());
   if (!model)

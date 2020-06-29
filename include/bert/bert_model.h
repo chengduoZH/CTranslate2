@@ -19,6 +19,8 @@ public:
        int device_index = 0,
        ComputeType compute_type = ComputeType::DEFAULT);
 
+  Bert(const std::shared_ptr<const ctranslate2::models::Model>& model);
+
   std::vector<std::vector<std::vector<float>>>  operator()(const std::vector<std::vector<size_t >> &input,
                                              const std::vector<std::vector<size_t>> &token_type_ids) const;
 
