@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include <ctranslate2/translator_pool.h>
+#include <bert/bert_model.h>
 
 namespace py = pybind11;
 
@@ -28,17 +29,19 @@ py::list std_vector_to_py_list(const std::vector<std::string>& v) {
   return l;
 }
 
-std::vector<std::string> py_list_to_std_vector(const py::object& l) {
-  std::vector<std::string> v;
+template <typename T>
+std::vector<T> py_list_to_std_vector(const py::object& l) {
+  std::vector<T> v;
   v.reserve(py::len(l));
   for (const auto& s : l)
-    v.emplace_back(s.cast<std::string>());
+    v.emplace_back(s.cast<T>());
   return v;
 }
 
-static std::vector<std::vector<std::string>> batch_to_vector(const py::object& l,
-                                                             bool optional = false) {
-  std::vector<std::vector<std::string>> v;
+template <typename T>
+static std::vector<std::vector<T>> batch_to_vector(const py::object& l,
+                                                   bool optional = false) {
+  std::vector<std::vector<T>> v;
   if (l.is(py::none()))
     return v;
   v.reserve(py::len(l));
@@ -49,7 +52,7 @@ static std::vector<std::vector<std::string>> batch_to_vector(const py::object& l
       else
         throw std::invalid_argument("Invalid None value in input list");
     } else
-      v.emplace_back(py_list_to_std_vector(handle.cast<py::object>()));
+      v.emplace_back(py_list_to_std_vector<T>(handle.cast<py::object>()));
   }
   return v;
 }
@@ -174,8 +177,8 @@ public:
 
     assert_model_is_ready();
 
-    const auto source_input = batch_to_vector(source);
-    const auto target_prefix_input = batch_to_vector(target_prefix, /*optional=*/true);
+    const auto source_input = batch_to_vector<std::string>(source);
+    const auto target_prefix_input = batch_to_vector<std::string>(target_prefix, /*optional=*/true);
     std::vector<ctranslate2::TranslationResult> results;
 
     {
@@ -288,6 +291,76 @@ private:
   }
 };
 
+
+class BertWrapper
+{
+public:
+  BertWrapper(const std::string& model_path,
+                    const std::string& device,
+                    int device_index,
+                    const std::string& compute_type,
+                    size_t inter_threads,
+                    size_t intra_threads)
+          : _model_path(model_path)
+          , _device(ctranslate2::str_to_device(device))
+          , _device_index(device_index)
+          , _compute_type(ctranslate2::str_to_compute_type(compute_type))
+          , _model((ctranslate2::set_num_threads(intra_threads),
+                  ctranslate2::models::Model::load(_model_path,
+                                                   _device,
+                                                   _device_index,
+                                                   _compute_type)))
+          , _model_state(ModelState::Loaded),
+            _bert(_model){
+  }
+
+  py::list operator()(const py::object& source) {
+    if (source.is(py::none()) || py::len(source) == 0)
+      return py::list();
+
+    assert_model_is_ready();
+    const auto source_input = batch_to_vector<size_t >(source);
+    std::vector<std::vector<std::vector<float>>> results;
+
+    {
+      std::vector<std::vector<size_t>> token_ids({});
+      py::gil_scoped_release release;
+      results = _bert(source_input, token_ids);
+    }
+
+    py::list py_results;
+    for (const auto& result : results) {
+      py::list sents_vec;
+      for (const auto& vec : result){
+        sents_vec.append(std_vector_to_py_list(vec));
+      }
+      py_results.append(sents_vec);
+    }
+    return py_results;
+  }
+private:
+  enum class ModelState {
+    Loaded,
+    Unloaded,
+    UnloadedToCpu,
+  };
+
+  const std::string _model_path;
+  const ctranslate2::Device _device;
+  const int _device_index;
+  const ctranslate2::ComputeType _compute_type;
+
+  std::shared_ptr<const ctranslate2::models::Model> _model;
+  ModelState _model_state;
+  bert::Bert _bert;
+
+  void assert_model_is_ready() const {
+    if (_model_state != ModelState::Loaded)
+      throw std::runtime_error("The model for this translator was unloaded");
+  }
+};
+
+
 PYBIND11_MODULE(translator, m)
 {
   m.def("contains_model", &ctranslate2::models::contains_model, py::arg("path"));
@@ -338,5 +411,17 @@ PYBIND11_MODULE(translator, m)
     .def("unload_model", &TranslatorWrapper::unload_model,
          py::arg("to_cpu")=false)
     .def("load_model", &TranslatorWrapper::load_model)
+    ;
+
+    py::class_<BertWrapper>(m, "Bert")
+    .def(py::init<std::string, std::string, int, std::string, size_t, size_t>(),
+            py::arg("model_path"),
+            py::arg("device")="cpu",
+            py::arg("device_index")=0,
+            py::arg("compute_type")="default",
+            py::arg("inter_threads")=1,
+            py::arg("intra_threads")=4)
+    .def("__call__", &BertWrapper::operator(),
+            py::arg("source"))
     ;
 }

@@ -5,7 +5,7 @@
 extern std::string g_data_dir;
 
 TEST(BertTest,  BertModel) {
-  bert::Bert bert("../../python/tests/bert_model_int8/");
+  bert::Bert bert("./bert_model_int8/");
   auto result = bert({{1, 2},
                       {3, 4}}, {});
   std::cout << result[0].size() << std::endl;

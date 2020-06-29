@@ -12,5 +12,5 @@ pytorch_model.bin
 model.bin
 python/torch_model/tmp/*
 python/torch_model/*
-python/tests/bert_model/*
+python/tests/bert/bert_model/*
 build2
