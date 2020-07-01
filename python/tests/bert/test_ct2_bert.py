@@ -12,6 +12,10 @@ def get_run_time(func, iterations=5):
     return (time.time() - begin) / iterations
 
 
+def get_random_data(range=1000, shape=(1, 64)):
+    return np.random.randint(range, size=shape)
+
+
 if __name__ == "__main__":
     # load ber model
     cfg = BertConfig()
@@ -23,35 +27,26 @@ if __name__ == "__main__":
     get_run_time(lambda: torch_model(input_ids))
     print(torch_model(input_ids)[0])
 
-    ct2_bert_model = ctranslate2.translator.Bert("./bert_model_fp32/")
+    ct2_bert_model = ctranslate2.translator.Bert("./bert_model_fp32/") #, intra_threads=1)
     get_run_time(lambda: ct2_bert_model(input))
     print(np.array(ct2_bert_model(input)))
 
-    ct2_bert_int8_model = ctranslate2.translator.Bert("./bert_model_int8/")
+    ct2_bert_int8_model = ctranslate2.translator.Bert("./bert_model_int8/") #, intra_threads=1)
     get_run_time(lambda: ct2_bert_int8_model(input))
     print(np.array(ct2_bert_int8_model(input)))
 
-
     def _run_torch_bert():
-        input_ids = torch.from_numpy(np.random.randint(1000, size=(1, 64)))
+        input_ids = torch.from_numpy(get_random_data())
         torch_model(input_ids)
-
-
-    print(
-        f"torch_bert time consume: {get_run_time(_run_torch_bert, iterations=100)}")
-
+    with torch.autograd.profiler.profile() as prof:
+        print(
+            f"torch_bert time consume: {get_run_time(_run_torch_bert, iterations=100)}")
+    print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
     def _run_ct2_bert():
-        ct2_bert_model(np.random.randint(1000, size=(1, 64)).tolist())
-
-
-    print(
-        f"ct2_bert time consume: {get_run_time(_run_ct2_bert, iterations=100)}")
-
+        ct2_bert_model(get_random_data().tolist())
+    print(f"ct2_bert time consume: {get_run_time(_run_ct2_bert, iterations=100)}")
 
     def _run_ct2_int8_bert():
-        ct2_bert_int8_model(np.random.randint(1000, size=(1, 64)).tolist())
-
-
-    print(
-        f"ct2_int8_bert time consume: {get_run_time(_run_ct2_int8_bert, iterations=100)}")
+        ct2_bert_int8_model(get_random_data().tolist())
+    print(f"ct2_int8_bert time consume: {get_run_time(_run_ct2_int8_bert, iterations=100)}")
