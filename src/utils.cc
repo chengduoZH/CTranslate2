@@ -20,7 +20,15 @@
 #  include "./cuda/utils.h"
 #endif
 
+#include "cpu/backend.h"
+#include "cpu/cpu_info.h"
+#include "cpu/cpu_isa.h"
+
 namespace ctranslate2 {
+
+  bool string_to_bool(const std::string& str) {
+    return str == "1" || str == "true" || str == "TRUE";
+  }
 
   std::string read_string_from_env(const char* var, const std::string& default_value) {
     const char* value = std::getenv(var);
@@ -30,28 +38,49 @@ namespace ctranslate2 {
   }
 
   bool read_bool_from_env(const char* var, const bool default_value) {
-    const std::string value_str = read_string_from_env(var, default_value ? "1" : "0");
-    return value_str == "1" || value_str == "true" || value_str == "TRUE";
+    return string_to_bool(read_string_from_env(var, default_value ? "1" : "0"));
   }
 
-#ifdef WITH_MKL
-  static bool mkl_has_fast_int_gemm() {
-#  if __INTEL_MKL__ > 2019 || (__INTEL_MKL__ == 2019 && __INTEL_MKL_UPDATE__ >= 5)
-    // Intel MKL 2019.5 added optimized integers GEMM for SSE4.2 and AVX (in addition to
-    // the existing AVX2 and AVX512), so it is virtually optimized for all target platforms.
-    return true;
-#  else
-    return mkl_cbwr_get_auto_branch() >= MKL_CBWR_AVX2;
-#  endif
+  bool verbose_mode() {
+    static const bool verbose = read_bool_from_env("CT2_VERBOSE");
+    return verbose;
   }
-#endif
+
+  static void log_config() {
+    LOG() << std::boolalpha
+          << "CPU: " << cpu::cpu_vendor()
+          << " (SSE4.1=" << cpu::cpu_supports_sse41()
+          << ", AVX=" << cpu::cpu_supports_avx()
+          << ", AVX2=" << cpu::cpu_supports_avx()
+          << ")" << std::endl;
+    LOG() << "Selected CPU ISA: " << cpu::isa_to_str(cpu::get_cpu_isa()) << std::endl;
+    LOG() << "Use Intel MKL: " << cpu::mayiuse_mkl() << std::endl;
+    LOG() << "SGEMM CPU backend: "
+          << cpu::gemm_backend_to_str(cpu::get_gemm_backend(ComputeType::FLOAT))
+          << std::endl;
+    LOG() << "GEMM_S16 CPU backend: "
+          << cpu::gemm_backend_to_str(cpu::get_gemm_backend(ComputeType::INT16))
+          << std::endl;
+    LOG() << "GEMM_S8 CPU backend: "
+          << cpu::gemm_backend_to_str(cpu::get_gemm_backend(ComputeType::INT8))
+          << " (u8s8 preferred: " << cpu::prefer_u8s8s32_gemm() << ")"
+          << std::endl;
+    LOG() << "Use packed GEMM: " << cpu::should_pack_gemm_weights() << std::endl;
+  }
+
+  // Maybe log run configuration on program start.
+  static struct ConfigLogger {
+    ConfigLogger() {
+      if (verbose_mode()) {
+        log_config();
+      }
+    }
+  } config_logger;
 
   bool mayiuse_int16(Device device, int) {
     switch (device) {
-#ifdef WITH_MKL
     case Device::CPU:
-      return mkl_has_fast_int_gemm();
-#endif
+      return cpu::has_gemm_backend(ComputeType::INT16);
     default:
       return false;
     }
@@ -59,14 +88,15 @@ namespace ctranslate2 {
 
   bool mayiuse_int8(Device device, int device_index) {
     switch (device) {
-#ifdef WITH_CUDA
     case Device::CUDA:
+#ifdef WITH_CUDA
       return cuda::has_fast_int8(device_index);
+#else
+      (void)device_index;
+      return false;
 #endif
-#ifdef WITH_MKL
     case Device::CPU:
-      return mkl_has_fast_int_gemm();
-#endif
+      return cpu::has_gemm_backend(ComputeType::INT8);
     default:
       return false;
     }

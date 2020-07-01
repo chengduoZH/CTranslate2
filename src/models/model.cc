@@ -5,6 +5,8 @@
 #include "ctranslate2/models/transformer.h"
 #include "ctranslate2/utils.h"
 
+#include "cpu/backend.h"
+
 namespace ctranslate2 {
   namespace models {
 
@@ -36,6 +38,7 @@ namespace ctranslate2 {
 
     static DataType compute_type_to_data_type(const ComputeType compute_type,
                                               const DataType data_type,
+                                              const Device device,
                                               const bool support_int8,
                                               const bool support_int16) {
       switch (compute_type) {
@@ -44,21 +47,23 @@ namespace ctranslate2 {
       }
       case ComputeType::INT16: {
         if (!support_int16)
-          throw std::invalid_argument("Requested int16 compute type, but device doesn't "
-                                      "support efficient int16 computation.");
+          throw std::invalid_argument("Requested int16 compute type, but the target device "
+                                      "and backend do not support efficient int16 computation.");
         return DataType::INT16;
       }
       case ComputeType::INT8: {
         if (!support_int8)
-          throw std::invalid_argument("Requested int8 compute type, but device doesn't "
-                                      "support efficient int8 computation.");
+          throw std::invalid_argument("Requested int8 compute type, but the target device "
+                                      "and backend do not support efficient int8 computation.");
         return DataType::INT8;
       }
       case ComputeType::DEFAULT: {
         // By default we possibly promote the saved type depending on the hardware support.
         switch (data_type) {
         case DataType::INT16:
-          return support_int16 ? DataType::INT16 : DataType::FLOAT;
+          return (support_int16
+                  ? DataType::INT16
+                  : (device == Device::CPU && support_int8 ? DataType::INT8 : DataType::FLOAT));
         case DataType::INT8:
           return (support_int8
                   ? DataType::INT8
@@ -74,11 +79,41 @@ namespace ctranslate2 {
 
     static void move_variables_to_device(std::unordered_map<std::string, StorageView>& variables,
                                          const Device device) {
+      // Some variables can be shallow copies of others. Those variables should not be
+      // moved but updated to point to the new location.
+      std::unordered_map<void*, std::vector<StorageView*>> buffer_to_aliases;
+      std::vector<StorageView*> variables_to_move;
+
+      buffer_to_aliases.reserve(variables.size());
+      variables_to_move.reserve(variables.size());
+
+      // First pass to select the variables to move and map the aliases to the buffer they alias.
       for (auto& pair : variables) {
         StorageView& variable = pair.second;
-        if (!variable.is_scalar() && variable.device() != device) {
-          StorageView variable_device = variable.to(device);
-          swap(variable, variable_device);
+        if (variable.is_scalar() || variable.device() == device)
+          continue;
+
+        if (variable.owns_data()) {
+          variables_to_move.push_back(&variable);
+        } else {
+          buffer_to_aliases[variable.buffer()].push_back(&variable);
+        }
+      }
+
+      // Second pass to move variables and update the associated aliases.
+      for (auto* variable : variables_to_move) {
+        void* prev_buffer = variable->buffer();
+
+        StorageView variable_device = variable->to(device);
+        swap(*variable, variable_device);
+
+        auto it = buffer_to_aliases.find(prev_buffer);
+        if (it != buffer_to_aliases.end()) {
+          for (StorageView* alias : it->second) {
+            StorageView new_alias(alias->dtype(), device);
+            new_alias.shallow_copy(*variable);
+            swap(*alias, new_alias);
+          }
         }
       }
     }
@@ -293,6 +328,7 @@ namespace ctranslate2 {
         if (is_quantizable(name)) {
           const DataType target_dtype = compute_type_to_data_type(_compute_type,
                                                                   variable.dtype(),
+                                                                  _device,
                                                                   support_int8,
                                                                   support_int16);
           ensure_dtype(name,
@@ -320,7 +356,7 @@ namespace ctranslate2 {
       if (_device != Device::CPU)
         return;  // There is currently no processing for non CPU device.
 
-      const bool should_pack_weights = read_bool_from_env("CT2_USE_EXPERIMENTAL_PACKED_GEMM");
+      const bool should_pack_weights = cpu::should_pack_gemm_weights();
       const bool transpose = true;
       const float alpha = 1;
 
@@ -341,8 +377,7 @@ namespace ctranslate2 {
         // the input of linear layers to the u8 domain and add a compensation term.
         // This term only depends on the linear weight, so we can compute it once and
         // store it as a model variable.
-        if (dtype == DataType::INT8
-            && primitives<Device::CPU>::prefer_u8s8s32_gemm()) {
+        if (dtype == DataType::INT8 && cpu::prefer_u8s8s32_gemm()) {
           StorageView compensation({n}, DataType::INT32);
           primitives<Device::CPU>::compute_u8_compensation(weight.data<int8_t>(),
                                                            transpose,

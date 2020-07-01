@@ -171,12 +171,10 @@ namespace ctranslate2 {
     template <typename T>
     static void transpose_4d(const T* a, const dim_t* dims, const dim_t* perm, T* b);
 
-    static void pow(const float* x, float* y, float power, dim_t size);
     static void exp(const float* x, float* y, dim_t size);
     static void log(const float* x, float* y, dim_t size);
     static void cos(const float* x, float* y, dim_t size);
     static void sin(const float* x, float* y, dim_t size);
-    static void tanh(const float* x, float* y, dim_t size);
     static void relu(const float* x, float* y, dim_t size);
     static void gelu(const float* x, float* y, dim_t size);
 
@@ -186,7 +184,6 @@ namespace ctranslate2 {
                                         dim_t n,
                                         float alpha,
                                         int32_t* compensation);
-    static bool prefer_u8s8s32_gemm();
 
     // If dest is not passed, returns the number of bytes required to store the packed data,
     // or 0 if packing is not supported.

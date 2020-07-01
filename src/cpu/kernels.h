@@ -9,6 +9,15 @@ namespace ctranslate2 {
     template <CpuIsa ISA, typename T>
     void rcp(const T* x, T* y, dim_t size);
 
+    template <CpuIsa ISA>
+    void exp(const float* x, float* y, dim_t size);
+    template <CpuIsa ISA>
+    void log(const float* x, float* y, dim_t size);
+    template <CpuIsa ISA>
+    void sin(const float* x, float* y, dim_t size);
+    template <CpuIsa ISA>
+    void cos(const float* x, float* y, dim_t size);
+
     template <CpuIsa ISA, typename T>
     void add(T a, const T* x, T* y, dim_t size);
     template <CpuIsa ISA, typename T>
@@ -31,6 +40,23 @@ namespace ctranslate2 {
     void min(T a, const T* x, T* y, dim_t size);
     template <CpuIsa ISA, typename T>
     void min(const T* a, const T* b, T* c, dim_t size);
+
+    template <CpuIsa ISA, typename T>
+    T reduce_sum(const T* x, dim_t size);
+    template <CpuIsa ISA, typename T>
+    T reduce_max(const T* x, dim_t size);
+    template <CpuIsa ISA, typename T>
+    T reduce_amax(const T* x, dim_t size);
+
+    template <CpuIsa ISA>
+    void softmax(const float* input,
+                 const int32_t* lengths,
+                 float* output,
+                 dim_t lengths_size,
+                 dim_t batch_size,
+                 dim_t depth,
+                 bool log,
+                 float epsilon);
 
   }
 }

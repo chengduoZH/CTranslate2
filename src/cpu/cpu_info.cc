@@ -1,7 +1,5 @@
 #include "cpu_info.h"
 
-#include <string>
-
 #ifdef _WIN32
 #  include <intrin.h>
 #  include <immintrin.h>
@@ -41,6 +39,7 @@ namespace ctranslate2 {
 
     struct CPUInfo {
       std::string vendor;
+      bool is_intel = false;
       bool sse41 = false;
       bool avx = false;
       bool avx2 = false;
@@ -57,6 +56,7 @@ namespace ctranslate2 {
         vendor = (std::string(reinterpret_cast<const char*>(&ebx), 4)
                   + std::string(reinterpret_cast<const char*>(&edx), 4)
                   + std::string(reinterpret_cast<const char*>(&ecx), 4));
+        is_intel = (vendor == "GenuineIntel");
 
         get_cpuid(1, data);
         sse41 = ecx & (1 << 19);
@@ -75,8 +75,12 @@ namespace ctranslate2 {
 
     static CPUInfo cpu_info;
 
+    const std::string& cpu_vendor() {
+      return cpu_info.vendor;
+    }
+
     bool cpu_is_intel() {
-      return cpu_info.vendor == "GenuineIntel";
+      return cpu_info.is_intel;
     }
 
     bool cpu_supports_sse41() {

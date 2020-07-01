@@ -2,7 +2,25 @@
 
 ### New features
 
+* Add tokenization and detokenization hooks for file translation APIs
+* Add alternatives to Intel MKL:
+  * Integrate [oneDNN](https://github.com/oneapi-src/oneDNN) for GEMM functions
+  * Implement vectorized operators that automatically select the instruction set architecture (ISA) (can be manually controlled with the `CT2_FORCE_CPU_ISA` environment variable)
+* When alternatives are available, avoid using Intel MKL on non Intel processors (can be manually controlled with the `CT2_USE_MKL` environment variable)
+* Enable a verbose mode with the environment variable `CT2_VERBOSE=1` to help debugging the run configuration (e.g. the detected CPU, whether Intel MKL is being used, etc.)
+
 ### Fixes and improvements
+
+* Improve numerical precision of SoftMax and LogSoftMax layers on CPU
+* Parallelize INT16 quantization/dequantization and ReLU on CPU
+* Add back the translation client in CentOS 7 Docker images
+
+## [v1.10.2](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.10.2) (2020-06-23)
+
+### Fixes and improvements
+
+* [Python] Fix error when calling `unload_model(to_cpu=True)` for models with shared weights
+* [Python] Do not ignore errors when importing the compiled translator extension
 
 ## [v1.10.1](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.10.1) (2020-05-25)
 

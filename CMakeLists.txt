@@ -8,6 +8,7 @@ endif()
 project(ctranslate2)
 
 option(WITH_MKL "Compile with Intel MKL backend" ON)
+option(WITH_DNNL "Compile with DNNL backend" OFF)
 option(WITH_CUDA "Compile with CUDA backend" OFF)
 option(WITH_TENSORRT "Compile with TensorRT (required for TopK with k > 1)" ON)
 option(ENABLE_CPU_DISPATCH "Compile CPU kernels for multiple ISA and dispatch at runtime" ON)
@@ -61,10 +62,12 @@ find_package(Threads)
 set(INCLUDE_DIRECTORIES
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   )
 set(SOURCES
   src/decoding.cc
   src/devices.cc
+  src/cpu/backend.cc
   src/cpu/cpu_info.cc
   src/cpu/cpu_isa.cc
   src/cpu/kernels.cc
@@ -244,6 +247,26 @@ if(WITH_MKL)
   endif()
 endif()
 
+if(WITH_DNNL)
+  find_path(DNNL_INCLUDE_DIR NAMES dnnl.h)
+  if(DNNL_INCLUDE_DIR)
+    message(STATUS "Found DNNL include directory: ${DNNL_INCLUDE_DIR}")
+  else()
+    message(FATAL_ERROR "DNNL include directory not found")
+  endif()
+
+  find_library(DNNL_LIBRARY NAMES dnnl)
+  if(DNNL_LIBRARY)
+    message(STATUS "Found DNNL library: ${DNNL_LIBRARY}")
+  else()
+    message(FATAL_ERROR "DNNL library not found")
+  endif()
+
+  add_definitions(-DWITH_DNNL)
+  list(APPEND INCLUDE_DIRECTORIES ${DNNL_INCLUDE_DIR})
+  list(APPEND LIBRARIES ${DNNL_LIBRARY})
+endif()
+
 if (WITH_CUDA)
   find_package(CUDA 10.0 REQUIRED)
   add_definitions(-DWITH_CUDA)
@@ -279,8 +302,8 @@ if (WITH_CUDA)
 
     if(NOT MSVC)
       # TensorRT 6 header generates a lot of deprecating warnings. Ignore them.
-      set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -isystem ${TENSORRT_INCLUDE_DIR}")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -isystem ${TENSORRT_INCLUDE_DIR}")
+      set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -Wno-deprecated-declarations")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations")
     endif()
 
     add_definitions(-DWITH_TENSORRT)
