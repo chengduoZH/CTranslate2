@@ -1,5 +1,7 @@
 #include "ctranslate2/profiler.h"
 
+#include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <iomanip>
 #include <memory>
@@ -127,6 +129,16 @@ namespace ctranslate2 {
     if (profiler) {
       profiler->dump(os);
       profiler.reset();
+    }
+  }
+
+  void dump_profiling_fo_file(const std::string& file){
+    std::ofstream out(file);
+    if(out.is_open()){
+      dump_profiling(out);
+      out.close();
+    }else{
+      throw std::runtime_error("open file failed");
     }
   }
 

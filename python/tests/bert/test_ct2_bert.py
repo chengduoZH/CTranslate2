@@ -43,10 +43,13 @@ if __name__ == "__main__":
             f"torch_bert time consume: {get_run_time(_run_torch_bert, iterations=100)}")
     print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
+    ctranslate2.translator.init_profiling("cpu", 1)
     def _run_ct2_bert():
         ct2_bert_model(get_random_data().tolist())
     print(f"ct2_bert time consume: {get_run_time(_run_ct2_bert, iterations=100)}")
 
-    def _run_ct2_int8_bert():
-        ct2_bert_int8_model(get_random_data().tolist())
-    print(f"ct2_int8_bert time consume: {get_run_time(_run_ct2_int8_bert, iterations=100)}")
+    ctranslate2.translator.dump_profiling("./profile.prof")
+    #
+    # def _run_ct2_int8_bert():
+    #     ct2_bert_int8_model(get_random_data().tolist())
+    # print(f"ct2_int8_bert time consume: {get_run_time(_run_ct2_int8_bert, iterations=100)}")

@@ -18,6 +18,7 @@ namespace ctranslate2 {
 
   void init_profiling(Device device, size_t num_threads = 1);  // Not thread-safe.
   void dump_profiling(std::ostream& os);  // Not thread-safe.
+  void dump_profiling_fo_file(const std::string& os);  // Not thread-safe.
 
 
   // Times of profilers created in different threads with the same name are accumulated.

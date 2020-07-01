@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include <ctranslate2/translator_pool.h>
+#include <ctranslate2/profiler.h>
 #include <bert/bert_model.h>
 
 namespace py = pybind11;
@@ -424,4 +425,10 @@ PYBIND11_MODULE(translator, m)
     .def("__call__", &BertWrapper::operator(),
             py::arg("source"))
     ;
+
+    m.def("init_profiling", [](const std::string& device, int inter_threads) {
+      ctranslate2::init_profiling(ctranslate2::str_to_device(device), inter_threads);
+    });
+    m.def("dump_profiling", &ctranslate2::dump_profiling_fo_file);
+
 }
