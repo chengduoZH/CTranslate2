@@ -103,16 +103,8 @@ namespace ctranslate2 {
   template<>
   template <typename T>
   void primitives<Device::CPU>::fill(T* x, T a, dim_t size) {
-    std::fill_n(x, size, a);
+    std::fill(x, x + size, a);
   }
-
-#ifdef WITH_MKL
-  template<>
-  template<>
-  void primitives<Device::CPU>::fill(float* x, float a, dim_t size) {
-    cblas_scopy(size, &a, /*incx=*/0, x, /*incy=*/1);
-  }
-#endif
 
   template<>
   template <typename T>
@@ -133,16 +125,8 @@ namespace ctranslate2 {
   template<>
   template <typename T>
   void primitives<Device::CPU>::copy(const T* x, T* y, dim_t size) {
-    std::copy_n(x, size, y);
+    std::copy(x, x + size, y);
   }
-
-#ifdef WITH_MKL
-  template<>
-  template<>
-  void primitives<Device::CPU>::copy(const float* x, float* y, dim_t size) {
-    cblas_scopy(size, x, 1 /* incx */, y, 1 /* incy */);
-  }
-#endif
 
   template<>
   template <typename T>
@@ -461,6 +445,19 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::gelu(const float* x, float* y, dim_t size) {
+#ifdef WITH_MKL
+    if (cpu::mayiuse_mkl()) {
+      const bool inplace = (x == y);
+      float* tmp = y;
+      if (inplace)
+        tmp = static_cast<float*>(alloc_data(size * sizeof (float)));
+      vsCdfNorm(size, x, tmp);
+      vsMul(size, x, tmp, y);
+      if (inplace)
+        free_data(tmp);
+      return;
+    }
+#endif
     static const float pi = std::acos(-1.f);
     static const float scale = std::sqrt(2.f / pi);
     parallel_unary_transform(
