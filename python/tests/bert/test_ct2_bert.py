@@ -64,6 +64,7 @@ def test_ct2_bert(model_path):
 
 
 if __name__ == "__main__":
+    print(torch.__config__.parallel_info())
     test_torch_bert()
     test_torch_bert(with_quantize=True)
     test_ct2_bert("./bert_model_fp32/")
