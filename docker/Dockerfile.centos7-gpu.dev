@@ -1,0 +1,95 @@
+FROM nvidia/cuda:10.0-cudnn7-devel-centos7 as builder
+
+RUN yum install -y epel-release centos-release-scl-rh && \
+    yum install -y \
+        devtoolset-8-gcc \
+        devtoolset-8-gcc-c++ \
+        gcc \
+        gcc-c++ \
+        make \
+        python3-devel \
+        wget && \
+    rm -rf /var/cache/yum/* && \
+    python3 -m pip --no-cache-dir install --upgrade pip
+
+WORKDIR /root
+ENV PATH=${PATH}:/opt/miniconda3/bin CONDA_PREFIX=/opt/miniconda3
+RUN curl -LO http://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
+    bash Miniconda3-latest-Linux-x86_64.sh -p /opt/miniconda3 -b && \
+    rm Miniconda3-latest-Linux-x86_64.sh && \
+    conda update -y conda && \
+    conda install curl conda-verify conda-build mkl-include cmake -c anaconda && \
+    conda clean -afy
+RUN pip --no-cache-dir install contexttimer future transformers docopt pybind11==2.4.3
+
+ENV MKL_VERSION=2020
+ENV MKL_UPDATE=0
+ENV MKL_BUILD=088
+ENV PATH=/opt/intel/mkl/:$PATH
+RUN yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo && \
+    rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB && \
+    yum install -y intel-mkl-64bit-$MKL_VERSION.$MKL_UPDATE-$MKL_BUILD && \
+    rm -rf /var/cache/yum/*
+
+ENV DNNL_VERSION=1.5.0
+ENV DNNL_TAG=v1.5
+ENV DNNL_DIR=/root/dnnl
+RUN wget https://github.com/oneapi-src/oneDNN/releases/download/${DNNL_TAG}/dnnl_lnx_${DNNL_VERSION}_cpu_gomp.tgz && \
+    tar xf dnnl*.tgz && \
+    rm dnnl*.tgz && \
+    mv dnnl* ${DNNL_DIR}
+
+ENV TENSORRT_MAJOR_VERSION=6
+ENV TENSORRT_VERSION=${TENSORRT_MAJOR_VERSION}.0.1
+RUN curl -fsSL https://developer.download.nvidia.com/compute/machine-learning/repos/rhel7/x86_64/libnvinfer-devel-${TENSORRT_VERSION}-1.cuda10.0.x86_64.rpm -O && \
+    curl -fsSL https://developer.download.nvidia.com/compute/machine-learning/repos/rhel7/x86_64/libnvinfer${TENSORRT_MAJOR_VERSION}-${TENSORRT_VERSION}-1.cuda10.0.x86_64.rpm -O && \
+    rpm -ivh --nodeps libnvinfer*.rpm && \
+    rm libnvinfer*.rpm
+
+WORKDIR /root/ctranslate2-dev
+
+COPY third_party third_party
+COPY cli cli
+COPY include include
+COPY src src
+COPY CMakeLists.txt .
+
+ARG CXX_FLAGS
+ENV CXX_FLAGS=${CXX_FLAGS}
+ARG CUDA_NVCC_FLAGS
+ENV CUDA_NVCC_FLAGS=${CUDA_NVCC_FLAGS:-"-Xfatbin -compress-all"}
+ARG CUDA_ARCH_LIST
+ENV CUDA_ARCH_LIST=${CUDA_ARCH_LIST:-"Common"}
+ENV CTRANSLATE2_ROOT=/root/ctranslate2
+
+RUN mkdir build && \
+    cd build && \
+    source scl_source enable devtoolset-8 && \
+    cmake -DCMAKE_INSTALL_PREFIX=${CTRANSLATE2_ROOT} \
+          -DCMAKE_PREFIX_PATH=${DNNL_DIR} -DWITH_DNNL=ON -DOPENMP_RUNTIME=COMP \
+          -DWITH_CUDA=ON \
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
+          -DCUDA_HOST_COMPILER=/usr/bin/cc \
+          -DCUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS}" -DCUDA_ARCH_LIST="${CUDA_ARCH_LIST}" .. && \
+    VERBOSE=1 make -j4 && \
+    make install
+
+ENV LANG=en_US.UTF-8
+COPY README.md .
+COPY python python
+
+ENV PATH=/opt/miniconda3/bin:${PATH}
+RUN pip --no-cache-dir install contexttimer future transformers docopt pybind11==2.4.3
+WORKDIR /root/ctranslate2-dev/python
+RUN python -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
+    source scl_source enable devtoolset-8 && \
+    python setup.py bdist_wheel && \
+    python setup.py sdist && \
+    rm -r build && \
+    mv dist/* /root/ctranslate2 && \
+    rmdir dist
+
+WORKDIR /root
+RUN cp -P ${DNNL_DIR}/lib/*.so* /root/ctranslate2/lib64 && \
+    cp -P /usr/local/cuda/lib64/libcudnn.so* /root/ctranslate2/lib64 && \
+    cp -P /lib64/libnvinfer.so* /root/ctranslate2/lib64
