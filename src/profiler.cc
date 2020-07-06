@@ -1,6 +1,6 @@
 #include "ctranslate2/profiler.h"
 
-#ifndef ENABLE_PROFILING
+#ifndef CT2_ENABLE_PROFILING
 
 #include <stdexcept>
 
@@ -26,7 +26,7 @@ namespace ctranslate2 {
 #include <unordered_map>
 #include <fstream>
 
-#ifdef WITH_CUDA
+#ifdef CT2_WITH_CUDA
 #  include <cuda_runtime.h>
 #endif
 
@@ -166,12 +166,13 @@ ScopeProfiler::ScopeProfiler(const std::string& name) {
   current_scope = this;
 }
 
+
 ScopeProfiler::~ScopeProfiler() {
   if (!profiler)
     return;
-#ifdef WITH_CUDA
+#ifdef CT2_WITH_CUDA
   if (profiler->device() == Device::CUDA)
-      cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
 #endif
   auto diff = std::chrono::high_resolution_clock::now() - _start;
   auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(diff);

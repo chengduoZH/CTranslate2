@@ -5,67 +5,12 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
-#include <thrust/device_vector.h>
 #include <thrust/iterator/discard_iterator.h>
-#include <thrust/iterator/transform_output_iterator.h>
 #include <cub/util_allocator.cuh>
 
-#include "../cuda/utils.h"
+#include "cuda/helpers.h"
 
 namespace ctranslate2 {
-
-  template <typename T1, typename T2, typename UnaryFunction>
-  void unary_transform(const T1* x, T2* y, dim_t size, const UnaryFunction& op) {
-    THRUST_CALL(thrust::transform, x, x + size, y, op);
-  }
-
-  template <typename T1, typename T2, typename T3, typename BinaryFunction>
-  void binary_transform(const T1* a, const T2* b, T3* c, dim_t size, const BinaryFunction& op) {
-    THRUST_CALL(thrust::transform, a, a + size, b, c, op);
-  }
-
-  template <typename T1, typename T2, typename T3, typename BinaryFunction, typename IndexFunction>
-  void binary_transform(T1 a, T2 b, T3 c, dim_t size,
-                        const BinaryFunction& op, const IndexFunction& index_a) {
-    auto index_it = thrust::make_transform_iterator(thrust::counting_iterator<dim_t>(0), index_a);
-    auto a_it = thrust::make_permutation_iterator(a, index_it);
-    THRUST_CALL(thrust::transform, a_it, a_it + size, b, c, op);
-  }
-
-  // perm_fun is a functor that takes the index in the permuted iterator and
-  // return the index in the original iterator.
-  template <typename T, typename PermFunction>
-  void permute(const T* x, T* y, dim_t size, const PermFunction& perm_fun) {
-    auto ind_it = thrust::counting_iterator<dim_t>(0);
-    auto perm_ind_it = thrust::make_transform_iterator(ind_it, perm_fun);
-    auto perm_it = thrust::make_permutation_iterator(x, perm_ind_it);
-    THRUST_CALL(thrust::copy, perm_it, perm_it + size, y);
-  }
-
-  template <typename T>
-  struct repeat_vec : thrust::unary_function<T, T> {
-    T _size;
-    repeat_vec(T size)
-      : _size(size) {
-    }
-    __host__ __device__
-    T operator()(const T i) {
-      return i % _size;
-    }
-  };
-
-  template <typename T>
-  struct repeat_vec_depth : thrust::unary_function<T, T> {
-    T _size;
-    repeat_vec_depth(T size)
-      : _size(size) {
-    }
-    __host__ __device__
-    T operator()(const T i) {
-      return i / _size;
-    }
-  };
-
 
   static const cuda::CachingAllocatorConfig allocator_config = cuda::get_caching_allocator_config();
   static cub::CachingDeviceAllocator allocator(
@@ -174,9 +119,9 @@ namespace ctranslate2 {
                                          T* values,
                                          int32_t* indices) {
     auto keys_it = thrust::make_transform_iterator(thrust::counting_iterator<int32_t>(0),
-                                                   repeat_vec_depth<int32_t>(cols));
+                                                   cuda::repeat_vec_depth<int32_t>(cols));
     auto ids_it = thrust::make_transform_iterator(thrust::counting_iterator<int32_t>(0),
-                                                  repeat_vec<int32_t>(cols));
+                                                  cuda::repeat_vec<int32_t>(cols));
 
     THRUST_CALL(thrust::reduce_by_key,
                 keys_it, keys_it + (rows * cols),
@@ -190,33 +135,34 @@ namespace ctranslate2 {
   template<>
   template <typename T>
   void primitives<Device::CUDA>::add(T a, const T* x, T* y, dim_t size) {
-    unary_transform(x, y, size, thrust::placeholders::_1 + a);
+    cuda::unary_transform(x, y, size, thrust::placeholders::_1 + a);
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::add(const T* a, const T* b, T* c, dim_t size) {
-    binary_transform(a, b, c, size, thrust::plus<T>());
+    cuda::binary_transform(a, b, c, size, thrust::plus<T>());
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::add_batch_broadcast(const T* a, const T* b, T* c,
                                                      dim_t a_size, dim_t b_size) {
-    binary_transform(a, b, c, b_size, thrust::plus<T>(), repeat_vec<dim_t>(a_size));
+    cuda::binary_transform(a, b, c, b_size, thrust::plus<T>(), cuda::repeat_vec<dim_t>(a_size));
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::add_depth_broadcast(const T* a, const T* b, T* c,
                                                      dim_t a_size, dim_t b_size) {
-    binary_transform(a, b, c, b_size, thrust::plus<T>(), repeat_vec_depth<dim_t>(b_size / a_size));
+    cuda::binary_transform(a, b, c, b_size, thrust::plus<T>(),
+                           cuda::repeat_vec_depth<dim_t>(b_size / a_size));
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::sub(const T* a, const T* b, T* c, dim_t size) {
-    binary_transform(a, b, c, size, thrust::minus<T>());
+    cuda::binary_transform(a, b, c, size, thrust::minus<T>());
   }
 
   template<typename T>
@@ -231,13 +177,13 @@ namespace ctranslate2 {
   template<>
   template <typename T>
   void primitives<Device::CUDA>::min(T a, const T* x, T* y, dim_t size) {
-    unary_transform(x, y, size, min_func<T>(a));
+    cuda::unary_transform(x, y, size, min_func<T>(a));
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::min(const T* a, const T* b, T* c, dim_t size) {
-    binary_transform(a, b, c, size, thrust::minimum<T>());
+    cuda::binary_transform(a, b, c, size, thrust::minimum<T>());
   }
 
   template<typename T>
@@ -252,159 +198,32 @@ namespace ctranslate2 {
   template<>
   template <typename T>
   void primitives<Device::CUDA>::max(T a, const T* x, T* y, dim_t size) {
-    unary_transform(x, y, size, max_func<T>(a));
+    cuda::unary_transform(x, y, size, max_func<T>(a));
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::max(const T* a, const T* b, T* c, dim_t size) {
-    binary_transform(a, b, c, size, thrust::maximum<T>());
+    cuda::binary_transform(a, b, c, size, thrust::maximum<T>());
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::mul(T a, const T* x, T* y, dim_t size) {
-    unary_transform(x, y, size, thrust::placeholders::_1 * a);
+    cuda::unary_transform(x, y, size, thrust::placeholders::_1 * a);
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::mul(const T* a, const T* b, T* c, dim_t size) {
-    binary_transform(a, b, c, size, thrust::multiplies<T>());
+    cuda::binary_transform(a, b, c, size, thrust::multiplies<T>());
   }
 
   template<>
   template <typename T>
   void primitives<Device::CUDA>::mul_batch_broadcast(const T* a, const T* b, T* c,
                                                      dim_t a_size, dim_t b_size) {
-    binary_transform(a, b, c, b_size, thrust::multiplies<T>(), repeat_vec<dim_t>(a_size));
-  }
-
-  struct absolute_maximum_func : public thrust::binary_function<float, float, float> {
-    __host__ __device__
-    float operator()(float a, float b) {
-      return fmaxf(fabsf(a), fabsf(b));
-    }
-  };
-
-  template <typename T>
-  class quantize_func : public thrust::binary_function<float, float, T> {
-  private:
-    float _shift;
-  public:
-    quantize_func(float shift)
-      : _shift(shift) {
-    }
-    __host__ __device__
-    T operator()(float scale, float x) {
-      return static_cast<T>(x * scale + _shift);
-    }
-  };
-
-  template<>
-  void primitives<Device::CUDA>::quantize_batch(const float* x,
-                                                float* scales,
-                                                int8_t* qx,
-                                                dim_t batch_size,
-                                                dim_t depth,
-                                                float shift) {
-    const dim_t size = batch_size * depth;
-
-    // Assign 1 key per batch.
-    auto keys_it = thrust::make_transform_iterator(thrust::counting_iterator<int>(0),
-                                                   repeat_vec_depth<int>(depth));
-
-    // scales = 127.0 / reduce_max(abs(x), axis=1)
-    THRUST_CALL(thrust::reduce_by_key,
-                keys_it, keys_it + size,
-                x,
-                thrust::make_discard_iterator(),
-                thrust::make_transform_output_iterator(
-                  scales, static_cast<float>(127) / thrust::placeholders::_1),
-                thrust::equal_to<int>(),
-                absolute_maximum_func());
-
-    // qx = x * expand_dims(scales, 1)
-    binary_transform(scales, x, qx, size,
-                     quantize_func<int8_t>(shift),
-                     repeat_vec_depth<dim_t>(depth));
-  }
-
-  template <typename T>
-  class dequantize_func : public thrust::binary_function<float, T, float> {
-  private:
-    float _shift;
-  public:
-    dequantize_func(float shift)
-      : _shift(shift) {
-    }
-    __device__
-    float operator()(float scale, T x) {
-      return __fdividef(static_cast<float>(x) - _shift, scale);
-    }
-  };
-
-  template<>
-  template<>
-  void primitives<Device::CUDA>::dequantize_batch(const int8_t* x, const float* scale, float* y,
-                                                  dim_t x_size, dim_t scale_size, float shift) {
-    binary_transform(scale, x, y, x_size,
-                     dequantize_func<int8_t>(shift),
-                     repeat_vec_depth<dim_t>(x_size / scale_size));
-  }
-
-  struct rescale_func : public thrust::binary_function<int32_t, thrust::tuple<float, float>, float> {
-    __device__
-    float operator()(int32_t x, const thrust::tuple<float, float>& scales) {
-      return __fdividef(__int2float_rn(x), (thrust::get<0>(scales) * thrust::get<1>(scales)));
-    }
-  };
-
-  template <bool transpose_a, bool transpose_b>
-  static void rescale_output_impl(const int32_t* c,
-                                  const float* a_scales,
-                                  const float* b_scales,
-                                  float* y,
-                                  dim_t batch_size,
-                                  dim_t depth) {
-#define EXPAND(scales, transpose)                                       \
-    thrust::make_permutation_iterator(                                  \
-      scales,                                                           \
-      thrust::make_transform_iterator(                                  \
-        thrust::counting_iterator<int>(0),                              \
-        typename std::conditional<transpose, repeat_vec<int>, repeat_vec_depth<int>>::type(depth)))
-
-    // y = c / (expand_dims(a_scales, trans_a ? 0 : 1) * expand_dims(b_scales, trans_b ? 0 : 1)
-    auto a_scales_it = EXPAND(a_scales, transpose_a);
-    auto b_scales_it = EXPAND(b_scales, transpose_b);
-    auto scales_it = thrust::make_zip_iterator(thrust::make_tuple(a_scales_it, b_scales_it));
-    const dim_t size = batch_size * depth;
-    THRUST_CALL(thrust::transform,
-                c, c + size,
-                scales_it,
-                y,
-                rescale_func());
-
-#undef EXPAND
-  }
-
-  template<>
-  void primitives<Device::CUDA>::rescale_output(const int32_t* c,
-                                                const float* a_scales,
-                                                const float* b_scales,
-                                                const bool transpose_a,
-                                                const bool transpose_b,
-                                                float* y,
-                                                dim_t batch_size,
-                                                dim_t depth) {
-    if (transpose_a && transpose_b)
-      rescale_output_impl<true, true>(c, a_scales, b_scales, y, batch_size, depth);
-    else if (transpose_a)
-      rescale_output_impl<true, false>(c, a_scales, b_scales, y, batch_size, depth);
-    else if (transpose_b)
-      rescale_output_impl<false, true>(c, a_scales, b_scales, y, batch_size, depth);
-    else
-      rescale_output_impl<false, false>(c, a_scales, b_scales, y, batch_size, depth);
+    cuda::binary_transform(a, b, c, b_size, thrust::multiplies<T>(), cuda::repeat_vec<dim_t>(a_size));
   }
 
   struct relu_func : public thrust::unary_function<float, float> {
@@ -414,7 +233,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CUDA>::relu(const float* x, float* y, dim_t size) {
-    unary_transform(x, y, size, relu_func());
+    cuda::unary_transform(x, y, size, relu_func());
   }
 
   struct gelu_func : public thrust::unary_function<float, float> {
@@ -432,7 +251,7 @@ namespace ctranslate2 {
   void primitives<Device::CUDA>::gelu(const float* x, float* y, dim_t size) {
     static const float pi = std::acos(-1.f);
     static const float scale = std::sqrt(2.f / pi);
-    unary_transform(x, y, size, gelu_func(scale));
+    cuda::unary_transform(x, y, size, gelu_func(scale));
   }
 
   template <typename T>
@@ -453,7 +272,7 @@ namespace ctranslate2 {
   template<>
   template <typename T>
   void primitives<Device::CUDA>::transpose_2d(const T* a, const dim_t* dims, T* b) {
-    permute(a, b, dims[0] * dims[1], perm_indices_2d<dim_t>(dims[0], dims[1]));
+    cuda::permute(a, b, dims[0] * dims[1], perm_indices_2d<dim_t>(dims[0], dims[1]));
   }
 
   template <typename T>
@@ -488,7 +307,7 @@ namespace ctranslate2 {
                                               const dim_t* dims,
                                               const dim_t* perm,
                                               T* b) {
-    permute(a, b, dims[0] * dims[1] * dims[2], perm_indices_3d<dim_t>(dims, perm));
+    cuda::permute(a, b, dims[0] * dims[1] * dims[2], perm_indices_3d<dim_t>(dims, perm));
   }
 
   template <typename T>
@@ -527,7 +346,7 @@ namespace ctranslate2 {
                                               const dim_t* dims,
                                               const dim_t* perm,
                                               T* b) {
-    permute(a, b, dims[0] * dims[1] * dims[2] * dims[3], perm_indices_4d<dim_t>(dims, perm));
+    cuda::permute(a, b, dims[0] * dims[1] * dims[2] * dims[3], perm_indices_4d<dim_t>(dims, perm));
   }
 
   template<>
@@ -629,7 +448,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CUDA>::exp(const float* x, float* y, dim_t size) {
-    unary_transform(x, y, size, exp_func());
+    cuda::unary_transform(x, y, size, exp_func());
   }
 
   struct log_func : public thrust::unary_function<float, float> {
@@ -639,7 +458,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CUDA>::log(const float* x, float* y, dim_t size) {
-    unary_transform(x, y, size, log_func());
+    cuda::unary_transform(x, y, size, log_func());
   }
 
 

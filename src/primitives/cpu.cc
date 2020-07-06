@@ -1,16 +1,15 @@
 #include "ctranslate2/primitives/primitives.h"
 
-#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <numeric>
 #include <stdexcept>
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
 #  include <mkl.h>
 #endif
 
-#ifdef WITH_DNNL
+#ifdef CT2_WITH_DNNL
 #  include <dnnl.h>
 #endif
 
@@ -22,51 +21,6 @@
 #define ALIGNMENT 64
 
 namespace ctranslate2 {
-
-  // work_size is an estimation of the amount of work per index (for example,
-  // 1 for a basic operator + - *, 2 for /, and 4 for exp, log, etc.).
-
-  template <typename T1, typename T2, typename Function>
-  void unary_transform(const T1* x,
-                       T2* y,
-                       dim_t size,
-                       const Function& func) {
-    std::transform(x, x + size, y, func);
-  }
-
-  template <typename T1, typename T2, typename Function>
-  void parallel_unary_transform(const T1* x,
-                                T2* y,
-                                dim_t size,
-                                dim_t work_size,
-                                const Function& func) {
-    cpu::parallel_for(0, size, work_size,
-                      [x, y, &func](dim_t begin, dim_t end) {
-                        std::transform(x + begin, x + end, y + begin, func);
-                      });
-  }
-
-  template <typename T1, typename T2, typename T3, typename Function>
-  void binary_transform(const T1* a,
-                        const T2* b,
-                        T3* c,
-                        dim_t size,
-                        const Function& func) {
-    std::transform(a, a + size, b, c, func);
-  }
-
-  template <typename T1, typename T2, typename T3, typename Function>
-  void parallel_binary_transform(const T1* a,
-                                 const T2* b,
-                                 T3* c,
-                                 dim_t size,
-                                 dim_t work_size,
-                                 const Function& func) {
-    cpu::parallel_for(0, size, work_size,
-                      [a, b, c, &func](dim_t begin, dim_t end) {
-                        std::transform(a + begin, a + end, b + begin, c + begin, func);
-                      });
-  }
 
   template<>
   void primitives<Device::CPU>::set_device(int) {
@@ -89,7 +43,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::clear_cache() {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     mkl_free_buffers();
 #endif
   }
@@ -114,7 +68,7 @@ namespace ctranslate2 {
     }
   }
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
   template<>
   template<>
   void primitives<Device::CPU>::strided_fill(float* x, float a, dim_t inc_x, dim_t size) {
@@ -161,7 +115,7 @@ namespace ctranslate2 {
   template<>
   template<>
   float primitives<Device::CPU>::amax(const float* x, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return std::abs(x[cblas_isamax(size, x, /*incx=*/1)]);
 #endif
@@ -201,7 +155,7 @@ namespace ctranslate2 {
   template<>
   template<>
   void primitives<Device::CPU>::add(const float* a, const float* b, float* c, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsAdd(size, a, b, c);
 #endif
@@ -242,7 +196,7 @@ namespace ctranslate2 {
   template<>
   template<>
   void primitives<Device::CPU>::sub(const float* a, const float* b, float* c, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsSub(size, a, b, c);
 #endif
@@ -264,7 +218,7 @@ namespace ctranslate2 {
   template<>
   template<>
   void primitives<Device::CPU>::max(const float* a, const float* b, float* c, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsFmax(size, a, b, c);
 #endif
@@ -286,7 +240,7 @@ namespace ctranslate2 {
   template<>
   template<>
   void primitives<Device::CPU>::min(const float* a, const float* b, float* c, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsFmin(size, a, b, c);
 #endif
@@ -302,7 +256,7 @@ namespace ctranslate2 {
   template<>
   template<>
   void primitives<Device::CPU>::mul(float a, const float* x, float* y, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return cblas_saxpby(size, a, x, 1 /* incx */, 0 /* b */, y, 1 /* incy */);
 #endif
@@ -318,7 +272,7 @@ namespace ctranslate2 {
   template<>
   template<>
   void primitives<Device::CPU>::mul(const float* a, const float* b, float* c, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsMul(size, a, b, c);
 #endif
@@ -338,104 +292,6 @@ namespace ctranslate2 {
   }
 
   template<>
-  template <typename T>
-  void primitives<Device::CPU>::quantize(const float* x,
-                                         T* y,
-                                         dim_t size,
-                                         float scale,
-                                         float shift) {
-    parallel_unary_transform(x, y, size, /*work_size=*/5,
-                             [scale, shift](float v) {
-                               return static_cast<T>(
-                                 std::max(
-                                   std::min(v * scale + shift,
-                                            static_cast<float>(std::numeric_limits<T>::max())),
-                                   static_cast<float>(std::numeric_limits<T>::lowest())));
-                             });
-  }
-
-  template<>
-  template <typename T>
-  void primitives<Device::CPU>::dequantize(const T* x,
-                                           float* y,
-                                           dim_t size,
-                                           float scale,
-                                           float shift) {
-    parallel_unary_transform(x, y, size, /*work_size=*/4,
-                             [scale, shift](T v) {
-                               return (static_cast<float>(v) - shift) / scale;
-                             });
-  }
-
-  template<>
-  template <typename T>
-  void primitives<Device::CPU>::dequantize_batch(const T* x, const float* scale, float* y,
-                                                 dim_t x_size, dim_t scale_size, float shift) {
-    const dim_t depth = x_size / scale_size;
-    #pragma omp parallel for
-    for (dim_t i = 0; i < scale_size; ++i) {
-      const dim_t offset = i * depth;
-      dequantize(x + offset, y + offset, depth, scale[i], shift);
-    }
-  }
-
-  template<>
-  void primitives<Device::CPU>::quantize_batch(const float* x,
-                                               float* scales,
-                                               int8_t* qx,
-                                               dim_t batch_size,
-                                               dim_t depth,
-                                               float shift) {
-    #pragma omp parallel for
-    for (dim_t i = 0; i < batch_size; ++i) {
-      const float* row = x + i * depth;
-      int8_t* qrow = qx + i * depth;
-      auto scale = static_cast<float>(std::numeric_limits<int8_t>::max()) / amax(row, depth);
-      unary_transform(row, qrow, depth,
-                      [scale, shift](float v) {
-                        return static_cast<int8_t>(v * scale + shift);
-                      });
-      scales[i] = scale;
-    }
-  }
-
-  template<>
-  void primitives<Device::CPU>::rescale_output(const int32_t* c,
-                                               const float* a_scales,
-                                               const float* b_scales,
-                                               const bool transpose_a,
-                                               const bool transpose_b,
-                                               float* y,
-                                               dim_t batch_size,
-                                               dim_t depth) {
-    if (!transpose_a && transpose_b) {
-      // Optimize the common case using transform and minimizing the number of division.
-      auto* r_b_scales = static_cast<float*>(alloc_data(depth * sizeof (float)));
-      CPU_ISA_DISPATCH((cpu::rcp<ISA>(b_scales, r_b_scales, depth)));
-      #pragma omp parallel for
-      for (dim_t i = 0; i < batch_size; ++i) {
-        const float r_a_scale = 1.f / a_scales[i];
-        const dim_t offset = i * depth;
-        binary_transform(c + offset, r_b_scales, y + offset, depth,
-                         [r_a_scale](int32_t v, float r_b_scale) {
-                           return static_cast<float>(v) * r_a_scale * r_b_scale;
-                         });
-      }
-      free_data(r_b_scales);
-    } else {
-      #pragma omp parallel for
-      for (dim_t i = 0; i < batch_size; ++i) {
-        for (dim_t j = 0; j < depth; ++j) {
-          const dim_t index = j + i * depth;
-          const float a_scale = transpose_a ? a_scales[j] : a_scales[i];
-          const float b_scale = transpose_b ? b_scales[j] : b_scales[i];
-          y[index] = static_cast<float>(c[index]) / (a_scale * b_scale);
-        }
-      }
-    }
-  }
-
-  template<>
   void primitives<Device::CPU>::relu(const float* x, float* y, dim_t size) {
     cpu::parallel_for(0, size, /*work_size=*/1,
                       [x, y](dim_t begin, dim_t end) {
@@ -445,7 +301,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::gelu(const float* x, float* y, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl()) {
       const bool inplace = (x == y);
       float* tmp = y;
@@ -460,7 +316,7 @@ namespace ctranslate2 {
 #endif
     static const float pi = std::acos(-1.f);
     static const float scale = std::sqrt(2.f / pi);
-    parallel_unary_transform(
+    cpu::parallel_unary_transform(
       x, y, size, /*work_size=*/14,
       [](float v) {
         return 0.5f * v * (1.f + std::tanh(scale * (v + 0.044715f * std::pow(v, 3.f))));
@@ -469,7 +325,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::exp(const float* x, float* y, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsExp(size, x, y);
 #endif
@@ -478,7 +334,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::log(const float* x, float* y, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsLn(size, x, y);
 #endif
@@ -487,7 +343,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::cos(const float* x, float* y, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsCos(size, x, y);
 #endif
@@ -496,7 +352,7 @@ namespace ctranslate2 {
 
   template<>
   void primitives<Device::CPU>::sin(const float* x, float* y, dim_t size) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (cpu::mayiuse_mkl())
       return vsSin(size, x, y);
 #endif
@@ -514,7 +370,7 @@ namespace ctranslate2 {
     }
   }
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
   template<>
   template<>
   void primitives<Device::CPU>::transpose_2d(const float* a, const dim_t* dims, float* b) {
@@ -558,6 +414,25 @@ namespace ctranslate2 {
                                              const dim_t* dims,
                                              const dim_t* perm,
                                              T* b) {
+    if (perm[0] == 0 && perm[1] == 2 && perm[2] == 1 && perm[3] == 3) {
+      // Optimize the permutation used in multi-head attention.
+      const dim_t r1 = dims[2];
+      const dim_t r2 = dims[1];
+      const dim_t depth = dims[3];
+
+      #pragma omp parallel for
+      for (dim_t i = 0; i < dims[0]; ++i) {
+        const dim_t offset = i * r1 * r2;
+        for (dim_t j = 0; j < r1 * r2; ++j) {
+          const dim_t a_offset = depth * (offset + j);
+          const dim_t b_offset = depth * (offset + j / r1 + (j % r1) * r2);
+          copy(a + a_offset, b + b_offset, depth);
+        }
+      }
+
+      return;
+    }
+
     dim_t perm_ind[4];
     for (dim_t i = 0; i < 4; ++i)
       perm_ind[perm[i]] = i;
@@ -587,7 +462,7 @@ namespace ctranslate2 {
   static cpu::GemmBackend gemm_s8_backend = cpu::get_gemm_backend(ComputeType::INT8);
   static cpu::GemmBackend gemm_s16_backend = cpu::get_gemm_backend(ComputeType::INT16);
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
   // m value used to pack the b matrix.
   constexpr MKL_INT mkl_gemm_pack_b_m = 1;
 #endif
@@ -600,7 +475,7 @@ namespace ctranslate2 {
                                              const dim_t n,
                                              const float alpha,
                                              float* dest) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (sgemm_backend == cpu::GemmBackend::MKL) {
       if (!dest)
         return cblas_sgemm_pack_get_size(CblasBMatrix, mkl_gemm_pack_b_m, n, k);
@@ -625,7 +500,7 @@ namespace ctranslate2 {
                                              const dim_t n,
                                              const float,
                                              int16_t* dest) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (gemm_s16_backend == cpu::GemmBackend::MKL) {
       if (!dest)
         return cblas_gemm_s16s16s32_pack_get_size(CblasBMatrix, mkl_gemm_pack_b_m, n, k);
@@ -649,7 +524,7 @@ namespace ctranslate2 {
                                              const dim_t n,
                                              const float,
                                              int8_t* dest) {
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     if (gemm_s8_backend == cpu::GemmBackend::MKL) {
       if (!dest)
         return cblas_gemm_s8u8s32_pack_get_size(CblasBMatrix, mkl_gemm_pack_b_m, n, k);
@@ -680,7 +555,7 @@ namespace ctranslate2 {
 
     switch (sgemm_backend) {
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     case cpu::GemmBackend::MKL: {
       CBLAS_TRANSPOSE trans_a = transpose_a ? CblasTrans : CblasNoTrans;
       CBLAS_TRANSPOSE trans_b = transpose_b ? CblasTrans : CblasNoTrans;
@@ -707,7 +582,7 @@ namespace ctranslate2 {
     }
 #endif
 
-#ifdef WITH_DNNL
+#ifdef CT2_WITH_DNNL
     case cpu::GemmBackend::DNNL: {
       dnnl_sgemm(transpose_a ? 'T' : 'N',
                  transpose_b ? 'T' : 'N',
@@ -737,7 +612,7 @@ namespace ctranslate2 {
                                      const int32_t*) {
     switch (gemm_s16_backend) {
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     case cpu::GemmBackend::MKL: {
       MKL_INT lda = transpose_a ? m : k;
       MKL_INT ldb = transpose_b ? k : n;
@@ -781,9 +656,9 @@ namespace ctranslate2 {
     }
   }
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
   static void shift_to_u8(const int8_t* x, uint8_t* ux, dim_t size) {
-    unary_transform(x, ux, size, [](int8_t v) { return static_cast<uint8_t>(v + 128); });
+    cpu::unary_transform(x, ux, size, [](int8_t v) { return static_cast<uint8_t>(v + 128); });
   }
 #endif
 
@@ -833,7 +708,7 @@ namespace ctranslate2 {
 
     switch (gemm_s8_backend) {
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     case cpu::GemmBackend::MKL: {
       // We are implementing s8s8s32 GEMM with cblas_gemm_s8u8s32. In row major mode,
       // it expects a to be unsigned and b to be signed. So we need to shift a to the
@@ -896,7 +771,7 @@ namespace ctranslate2 {
     }
 #endif
 
-#ifdef WITH_DNNL
+#ifdef CT2_WITH_DNNL
     case cpu::GemmBackend::DNNL: {
       const char transa = transpose_a ? 'T' : 'N';
       const char transb = transpose_b ? 'T' : 'N';
@@ -941,7 +816,7 @@ namespace ctranslate2 {
                                            float* c) {
     switch (sgemm_backend) {
 
-#ifdef WITH_MKL
+#ifdef CT2_WITH_MKL
     case cpu::GemmBackend::MKL: {
       MKL_INT lda = transpose_a ? m : k;
       MKL_INT ldb = transpose_b ? k : n;
@@ -1062,22 +937,7 @@ namespace ctranslate2 {
   primitives<Device::CPU>::transpose_4d(const T* a,                     \
                                         const dim_t* dims,              \
                                         const dim_t* perm,              \
-                                        T* b);                          \
-  template void                                                         \
-  primitives<Device::CPU>::dequantize_batch(const T* x,                 \
-                                            const float* scale,         \
-                                            float* y,                   \
-                                            dim_t x_size,               \
-                                            dim_t scale_size,           \
-                                            float shift);               \
-  template void                                                         \
-  primitives<Device::CPU>::quantize(const float* x, T* y,               \
-                                    dim_t size,                         \
-                                    float scale, float shift);          \
-  template void                                                         \
-  primitives<Device::CPU>::dequantize(const T* x, float* y,             \
-                                      dim_t size,                       \
-                                      float scale, float shift);
+                                        T* b);
 
   DECLARE_ALL_TYPES(DECLARE_IMPL)
 
