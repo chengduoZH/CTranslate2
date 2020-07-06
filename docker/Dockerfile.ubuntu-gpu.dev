@@ -4,29 +4,28 @@ FROM nvidia/cuda:10.0-cudnn7-devel-ubuntu${UBUNTU_VERSION} as builder
 ENV TENSORRT_MAJOR_VERSION=6
 ENV TENSORRT_VERSION=${TENSORRT_MAJOR_VERSION}.0.1
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        apt-transport-https \
-        build-essential \
-        ca-certificates \
-        python3-dev \
-        gnupg2 \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        apt-transport-https build-essential ca-certificates gnupg2 wget \
+        htop curl git bzip2 build-essential ninja-build g++ vim fish \
         libnvinfer${TENSORRT_MAJOR_VERSION}=${TENSORRT_VERSION}-1+cuda10.0 \
-        libnvinfer-dev=${TENSORRT_VERSION}-1+cuda10.0 \
-        wget && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+        libnvinfer-dev=${TENSORRT_VERSION}-1+cuda10.0  && \
+        apt-get clean && \
+        rm -rf /var/lib/apt/lists/*
+
+ENV PATH=${PATH}:/opt/miniconda3/bin CONDA_PREFIX=/opt/miniconda3
+RUN curl -LO http://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
+    bash Miniconda3-latest-Linux-x86_64.sh -p /opt/miniconda3 -b && \
+    rm Miniconda3-latest-Linux-x86_64.sh && \
+    conda update -y conda && \
+    conda install curl conda-verify conda-build mkl-include cmake -c anaconda && \
+    conda clean -afy
+RUN pip --no-cache-dir install contexttimer future transformers docopt pybind11==2.4.3
 
 WORKDIR /root
-
-RUN wget https://cmake.org/files/v3.12/cmake-3.12.2-Linux-x86_64.tar.gz
-RUN tar xf cmake-3.12.2-Linux-x86_64.tar.gz && \
-    rm cmake-3.12.2-Linux-x86_64.tar.gz
-ENV PATH=$PATH:/root/cmake-3.12.2-Linux-x86_64/bin
-
 ENV MKL_VERSION=2020
 ENV MKL_UPDATE=0
 ENV MKL_BUILD=088
+ENV PATH=/opt/intel/mkl/:$PATH
 RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB && \
     apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-*.PUB && \
     rm GPG-PUB-KEY-INTEL-SW-PRODUCTS-*.PUB && \
@@ -36,6 +35,9 @@ RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCT
         intel-mkl-64bit-$MKL_VERSION.$MKL_UPDATE-$MKL_BUILD && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+
+WORKDIR /root
 
 ENV DNNL_VERSION=1.5.0
 ENV DNNL_TAG=v1.5
@@ -76,14 +78,10 @@ COPY README.md .
 COPY python python
 
 WORKDIR /root/ctranslate2-dev/python
-RUN wget -nv https://bootstrap.pypa.io/get-pip.py && \
-    python3 get-pip.py && \
-    python3 -m pip --no-cache-dir install pybind11==2.4.3 && \
-    python3 setup.py bdist_wheel && \
+RUN python setup.py bdist_wheel && \
     rm -r build && \
-    rm get-pip.py && \
-    python3 -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
-    python3 setup.py sdist && \
+    python -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
+    python setup.py sdist && \
     mv dist/* /root/ctranslate2 && \
     rmdir dist
 
