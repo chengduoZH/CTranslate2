@@ -6,3 +6,9 @@ CMake*.json
 python/build/
 python/ctranslate2.egg-info/
 python/dist/
+build2/
+build3/
+cmake-build-debug/
+python/tests/bert/
+python/torch_model/
+release/
