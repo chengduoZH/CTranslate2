@@ -84,6 +84,7 @@ namespace ctranslate2 {
                      std::vector<std::vector<float>>* scores,
                      std::vector<std::vector<std::vector<std::vector<float>>>>* attention,
                      const size_t num_hypotheses) const {
+    std::cerr << "BeamSearch::search " << std::endl;
     PROFILE("beam_search");
     const dim_t min_step = start_step + min_length;
     const dim_t max_step = start_step + max_length;
@@ -118,6 +119,7 @@ namespace ctranslate2 {
       attention->resize(batch_size);
     }
 
+    std::cerr << "top_beam_finished" << std::endl;
     std::vector<bool> top_beam_finished(batch_size, false);
     std::vector<dim_t> batch_offset(batch_size);
     for (dim_t i = 0; i < batch_size; ++i) {
@@ -137,7 +139,9 @@ namespace ctranslate2 {
 
     StorageView coverage;
 
+    std::cerr << "start_step " << start_step << std::endl;
     for (dim_t step = start_step; step < max_step; ++step) {
+      std::cerr << "start_step " << step << std::endl;
       // Compute log probs for the current step.
       decoder(step,
               topk_ids.to(device),
@@ -191,6 +195,7 @@ namespace ctranslate2 {
         gather_indices.at<int32_t>(i) = beam_id + batch_id * _beam_size;
       }
 
+      std::cerr << "Append last prediction." << start_step << std::endl;
       // Append last prediction.
       gather(alive_seq, gather_indices);
       alive_seq.reshape({cur_batch_size, _beam_size, alive_seq.dim(-1)});
@@ -201,6 +206,7 @@ namespace ctranslate2 {
       topk_scores.reshape({cur_batch_size, _beam_size});
       topk_ids.reshape({cur_batch_size, _beam_size});
 
+      std::cerr << "_coverage_penalty" << start_step << std::endl;
       if(_coverage_penalty != 0){
         if(step == 0){
           coverage = attention_step;
@@ -220,6 +226,7 @@ namespace ctranslate2 {
         ops::Add()(penalty, topk_scores, topk_scores);
       }
 
+      std::cerr << "attention" << start_step << std::endl;
       if (attention) {
         if (alive_attention.empty()){
           alive_attention = attention_step;
@@ -297,6 +304,7 @@ namespace ctranslate2 {
         }
       }
 
+      std::cerr << "ed_count == cur_batch_siz" << step << std::endl;
       // If all remaining sentences are finished, no need to go further.
       if (finished_count == cur_batch_size)
         break;
