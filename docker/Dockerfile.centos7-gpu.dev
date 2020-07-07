@@ -80,11 +80,14 @@ COPY python python
 
 ENV PATH=/opt/miniconda3/bin:${PATH}
 RUN pip --no-cache-dir install contexttimer future transformers docopt pybind11==2.4.3
+RUN conda update -n base -c defaults conda && conda create -n py38 python=3.8 
+RUN /opt/miniconda3/envs/py38/bin/pip install pybind11==2.4.3
+
 WORKDIR /root/ctranslate2-dev/python
-RUN python -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
+RUN /opt/miniconda3/envs/py38/bin/python -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
     source scl_source enable devtoolset-8 && \
-    python setup.py bdist_wheel && \
-    python setup.py sdist && \
+    /opt/miniconda3/envs/py38/bin/python setup.py bdist_wheel && \
+    /opt/miniconda3/envs/py38/bin/python setup.py sdist && \
     rm -r build && \
     mv dist/* /root/ctranslate2 && \
     rmdir dist
