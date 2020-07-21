@@ -20,7 +20,7 @@ cd $ROOT_DIR
 
 VERSION=${1:-latest}
 PUSH=${2:-0}
-IMAGE=opennmt/ctranslate2
+IMAGE=chengduozh/ctranslate2
 
 build()
 {
