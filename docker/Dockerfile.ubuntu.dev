@@ -71,7 +71,6 @@ WORKDIR /root/ctranslate2-dev/python
 RUN python3 -m pip --no-cache-dir install pybind11==2.4.3 && \
     python3 setup.py bdist_wheel && \
     rm -r build && \
-    rm get-pip.py && \
     python3 -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
     python3 setup.py sdist && \
     mv dist/* /root/ctranslate2 && \
