@@ -8,7 +8,7 @@ RUN yum install -y epel-release centos-release-scl-rh && \
         gcc \
         gcc-c++ \
         make \
-        wget && \
+        wget curl && \
     rm -rf /var/cache/yum/* && \
     python3 -m pip --no-cache-dir install --upgrade pip
 

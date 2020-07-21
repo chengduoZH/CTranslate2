@@ -14,7 +14,7 @@ RUN export CUDA_SHORT_VERSION=`echo $CUDA_VERSION | cut -d'.' -f 1,2` && \
         gnupg2 \
         libnvinfer${TENSORRT_MAJOR_VERSION}=${TENSORRT_VERSION}-1+cuda${CUDA_SHORT_VERSION} \
         libnvinfer-dev=${TENSORRT_VERSION}-1+cuda${CUDA_SHORT_VERSION} \
-        wget && \
+        wget curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
