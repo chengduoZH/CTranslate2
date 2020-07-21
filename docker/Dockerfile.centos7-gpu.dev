@@ -62,7 +62,7 @@ ENV CUDA_NVCC_FLAGS=${CUDA_NVCC_FLAGS:-"-Xfatbin -compress-all"}
 ARG CUDA_ARCH_LIST
 ENV CUDA_ARCH_LIST=${CUDA_ARCH_LIST:-"Common"}
 ENV CTRANSLATE2_ROOT=/root/ctranslate2
-
+ENV PATH=/opt/intel/mkl/:$PATH
 RUN mkdir build && \
     cd build && \
     source scl_source enable devtoolset-8 && \

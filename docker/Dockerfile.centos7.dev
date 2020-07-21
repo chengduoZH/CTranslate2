@@ -47,7 +47,7 @@ COPY CMakeLists.txt .
 ARG CXX_FLAGS
 ENV CXX_FLAGS=${CXX_FLAGS}
 ENV CTRANSLATE2_ROOT=/root/ctranslate2
-
+ENV PATH=/opt/intel/mkl/:$PATH
 RUN mkdir build && \
     cd build && \
     source scl_source enable devtoolset-8 && \
