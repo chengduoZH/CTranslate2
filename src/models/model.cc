@@ -10,6 +10,8 @@
 namespace ctranslate2 {
   namespace models {
 
+    static const std::string binary_file = "model.bin";
+
     template <typename T>
     T consume(std::istream& in) {
       T val;
@@ -36,25 +38,34 @@ namespace ctranslate2 {
       return str;
     }
 
+    static inline void unsupported_compute_type(const std::string& name) {
+      throw std::invalid_argument("Requested " + name + " compute type, but the target device "
+                                  "or backend do not support efficient " + name + " computation.");
+    }
+
     static DataType compute_type_to_data_type(const ComputeType compute_type,
                                               const DataType data_type,
                                               const Device device,
                                               const bool support_int8,
-                                              const bool support_int16) {
+                                              const bool support_int16,
+                                              const bool support_float16) {
       switch (compute_type) {
       case ComputeType::FLOAT: {
         return DataType::FLOAT;
       }
+      case ComputeType::FLOAT16: {
+        if (!support_float16)
+          unsupported_compute_type("float16");
+        return DataType::FLOAT16;
+      }
       case ComputeType::INT16: {
         if (!support_int16)
-          throw std::invalid_argument("Requested int16 compute type, but the target device "
-                                      "and backend do not support efficient int16 computation.");
+          unsupported_compute_type("int16");
         return DataType::INT16;
       }
       case ComputeType::INT8: {
         if (!support_int8)
-          throw std::invalid_argument("Requested int8 compute type, but the target device "
-                                      "and backend do not support efficient int8 computation.");
+          unsupported_compute_type("int8");
         return DataType::INT8;
       }
       case ComputeType::DEFAULT: {
@@ -63,11 +74,15 @@ namespace ctranslate2 {
         case DataType::INT16:
           return (support_int16
                   ? DataType::INT16
-                  : (device == Device::CPU && support_int8 ? DataType::INT8 : DataType::FLOAT));
+                  : (device == Device::CPU
+                     ? (support_int8 ? DataType::INT8 : DataType::FLOAT)
+                     : (support_float16 ? DataType::FLOAT16 : DataType::FLOAT)));
         case DataType::INT8:
           return (support_int8
                   ? DataType::INT8
                   : (support_int16 ? DataType::INT16 : DataType::FLOAT));
+        case DataType::FLOAT16:
+          return support_float16 ? DataType::FLOAT16 : DataType::FLOAT;
         default:
           return data_type;
         }
@@ -103,9 +118,7 @@ namespace ctranslate2 {
       // Second pass to move variables and update the associated aliases.
       for (auto* variable : variables_to_move) {
         void* prev_buffer = variable->buffer();
-
-        StorageView variable_device = variable->to(device);
-        swap(*variable, variable_device);
+        *variable = variable->to(device);
 
         auto it = buffer_to_aliases.find(prev_buffer);
         if (it != buffer_to_aliases.end()) {
@@ -172,7 +185,7 @@ namespace ctranslate2 {
     }
 
 
-    Model::Model(const std::string&, size_t spec_revision)
+    Model::Model(ModelReader&, size_t spec_revision)
       : _spec_revision(spec_revision) {
     }
 
@@ -267,6 +280,7 @@ namespace ctranslate2 {
       const bool is_int8 = variable.dtype() == DataType::INT8;
       const bool is_int16 = variable.dtype() == DataType::INT16;
       const bool is_float = variable.dtype() == DataType::FLOAT;
+      const bool is_float16 = variable.dtype() == DataType::FLOAT16;
 
       const std::string scale_name = name + "_scale";
       StorageView* saved_scale = nullptr;
@@ -292,15 +306,33 @@ namespace ctranslate2 {
       const ops::Dequantize dequantize_op{};
       StorageView target_variable(target_dtype);
 
-      if (target_dtype == DataType::FLOAT) {
-        // Dequantize int8 or int16 back to float32.
-        dequantize_op(variable, *saved_scale, target_variable);
-        variables_to_remove.emplace_back(scale_name);  // The scale is no longer needed.
-      } else if (is_float) {
+      if (target_dtype == DataType::FLOAT || target_dtype == DataType::FLOAT16) {
+        if (is_float16) {
+          target_variable = variable.to_float();
+        } else if (is_float) {
+          target_variable = variable.to_float16();
+        } else {
+          // Dequantize int8 or int16 back to float32.
+          StorageView dequantized;
+          dequantize_op(variable, *saved_scale, dequantized);
+          variables_to_remove.emplace_back(scale_name);  // The scale is no longer needed.
+          if (target_dtype == DataType::FLOAT16) {
+            target_variable = dequantized.to_float16();
+          } else {
+            target_variable = std::move(dequantized);
+          }
+        }
+
+      } else if (is_float || is_float16) {
         // Quantize float32 to int8 or int16.
         StorageView scale;
-        quantize_op(variable, target_variable, scale);
+        if (is_float16) {
+          quantize_op(variable.to_float(), target_variable, scale);
+        } else {
+          quantize_op(variable, target_variable, scale);
+        }
         variables_to_add.emplace(scale_name, scale);
+
       } else {
         // Convert int8 -> float32 -> int16 or int16 -> float32 -> int8.
         StorageView tmp_variable;
@@ -308,7 +340,7 @@ namespace ctranslate2 {
         quantize_op(tmp_variable, target_variable, *saved_scale);
       }
 
-      swap(variable, target_variable);
+      variable = std::move(target_variable);
     }
 
     void Model::finalize() {
@@ -316,9 +348,27 @@ namespace ctranslate2 {
 
       const bool support_int8 = mayiuse_int8(_device, _device_index);
       const bool support_int16 = mayiuse_int16(_device, _device_index);
+      const bool support_float16 = mayiuse_float16(_device, _device_index);
 
       std::vector<std::string> variables_to_remove;
       std::unordered_map<std::string, StorageView> variables_to_add;
+
+      DataType model_dtype = DataType::FLOAT;
+      for (const auto& variable_pair : _variable_index) {
+        const std::string& name = variable_pair.first;
+        const StorageView& variable = variable_pair.second;
+        if (is_quantizable(name)) {
+          model_dtype = variable.dtype();
+          break;
+        }
+      }
+
+      const DataType target_dtype = compute_type_to_data_type(_compute_type,
+                                                              model_dtype,
+                                                              _device,
+                                                              support_int8,
+                                                              support_int16,
+                                                              support_float16);
 
       for (auto& variable_pair : _variable_index) {
         const auto& name = variable_pair.first;
@@ -326,16 +376,22 @@ namespace ctranslate2 {
 
         // Convert "weight" variables to the expected compute type.
         if (is_quantizable(name)) {
-          const DataType target_dtype = compute_type_to_data_type(_compute_type,
-                                                                  variable.dtype(),
-                                                                  _device,
-                                                                  support_int8,
-                                                                  support_int16);
           ensure_dtype(name,
                        variable,
                        target_dtype,
                        variables_to_add,
                        variables_to_remove);
+        } else if (!variable.is_scalar() && name.find("_scale") == std::string::npos) {
+          // Other parameters may be converted from or to float16 (e.g. bias).
+          if (target_dtype == DataType::FLOAT16) {
+            if (variable.dtype() == DataType::FLOAT) {
+              variable = variable.to_float16();
+            }
+          } else {
+            if (variable.dtype() == DataType::FLOAT16) {
+              variable = variable.to_float();
+            }
+          }
         }
       }
 
@@ -432,7 +488,7 @@ namespace ctranslate2 {
       }
     }
 
-    static Model* create_model(const std::string& path,
+    static Model* create_model(ModelReader& model_reader,
                                const std::string& spec,
                                size_t spec_revision) {
       Model* model = nullptr;
@@ -441,11 +497,11 @@ namespace ctranslate2 {
       // compatibility. Now all Transformer variants are saved under TransformerSpec.
 
       if (spec.empty() || spec == "TransformerBase")
-        model = new TransformerModel(path, spec_revision, /*num_heads=*/8);
+        model = new TransformerModel(model_reader, spec_revision, /*num_heads=*/8);
       else if (spec == "TransformerBig")
-        model = new TransformerModel(path, spec_revision, /*num_heads=*/16);
+        model = new TransformerModel(model_reader, spec_revision, /*num_heads=*/16);
       else if (spec == "TransformerSpec")
-        model = new TransformerModel(path, spec_revision);
+        model = new TransformerModel(model_reader, spec_revision);
       else
         throw std::invalid_argument("Unsupported model spec " + spec);
 
@@ -478,10 +534,17 @@ namespace ctranslate2 {
                                              Device device,
                                              int device_index,
                                              ComputeType compute_type) {
-      const std::string model_path = path + "/model.bin";
-      std::ifstream model_file(model_path, std::ios_base::in | std::ios_base::binary);
-      if (!model_file.is_open())
-        throw std::runtime_error("failed to load the model " + model_path);
+      ModelFileReader model_reader(path);
+      return load(model_reader, device, device_index, compute_type);
+    }
+
+    std::shared_ptr<const Model> Model:: load(ModelReader& model_reader,
+                                              Device device,
+                                              int device_index,
+                                              ComputeType compute_type) {
+      std::unique_ptr<std::istream> model_file_ptr = model_reader.get_required_file(binary_file,
+                                                                                    /*binary=*/true);
+      std::istream& model_file = *model_file_ptr;
 
       // See the model serialization in python/ctranslate2/specs/model_spec.py.
       const auto binary_version = consume<uint32_t>(model_file);
@@ -496,7 +559,7 @@ namespace ctranslate2 {
         spec_revision = 1;
       }
 
-      Model* model = create_model(path, spec, spec_revision);
+      Model* model = create_model(model_reader, spec, spec_revision);
       model->set_device(device, device_index);
       model->set_compute_type(compute_type);
 
@@ -547,7 +610,37 @@ namespace ctranslate2 {
     }
 
     bool contains_model(const std::string& path) {
-      return file_exists(path + "/model.bin");
+      return bool(ModelFileReader(path).get_file(binary_file));
+    }
+
+
+    std::unique_ptr<std::istream> ModelReader::get_required_file(const std::string& filename,
+                                                                 const bool binary) {
+      std::unique_ptr<std::istream> file = get_file(filename, binary);
+      if (!file)
+        throw std::runtime_error("Unable to open file '" + filename
+                                 + "' in model '" + get_model_id() + "'");
+      return file;
+    }
+
+
+    ModelFileReader::ModelFileReader(std::string model_dir, std::string path_separator)
+      : _model_dir(std::move(model_dir))
+      , _path_separator(std::move(path_separator)) {
+    }
+
+    std::string ModelFileReader::get_model_id() const {
+      return _model_dir;
+    }
+
+    std::unique_ptr<std::istream> ModelFileReader::get_file(const std::string& filename,
+                                                            const bool binary) {
+      const std::string path = _model_dir + _path_separator + filename;
+      const std::ios_base::openmode mode = binary ? std::ios_base::binary : std::ios_base::in;
+      std::unique_ptr<std::istream> stream(new std::ifstream(path, mode));
+      if (!stream || !(*stream))
+        return nullptr;
+      return stream;
     }
 
   }

@@ -1,6 +1,5 @@
 #include "ctranslate2/utils.h"
 
-#include <sys/stat.h>
 #include <chrono>
 #include <cstdlib>
 
@@ -41,6 +40,13 @@ namespace ctranslate2 {
     return string_to_bool(read_string_from_env(var, default_value ? "1" : "0"));
   }
 
+  int read_int_from_env(const char* var, const int default_value) {
+    const std::string value = read_string_from_env(var);
+    if (value.empty())
+      return default_value;
+    return std::stoi(value);
+  }
+
   bool verbose_mode() {
     static const bool verbose = read_bool_from_env("CT2_VERBOSE");
     return verbose;
@@ -77,6 +83,22 @@ namespace ctranslate2 {
     }
   } config_logger;
 
+  bool mayiuse_float16(Device device, int device_index) {
+    switch (device) {
+    case Device::CUDA: {
+#ifdef CT2_WITH_CUDA
+      static const bool allow_float16 = read_bool_from_env("CT2_CUDA_ALLOW_FP16");
+      return allow_float16 || cuda::has_fast_float16(device_index);
+#else
+      (void)device_index;
+      return false;
+#endif
+    }
+    default:
+      return false;
+    }
+  }
+
   bool mayiuse_int16(Device device, int) {
     switch (device) {
     case Device::CPU:
@@ -106,6 +128,8 @@ namespace ctranslate2 {
 #ifdef _OPENMP
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
+#else
+    (void)num_threads;
 #endif
   }
 
@@ -141,11 +165,6 @@ namespace ctranslate2 {
     static thread_local std::mt19937 generator(
       std::chrono::system_clock::now().time_since_epoch().count());
     return generator;
-  }
-
-  bool file_exists(const std::string& path) {
-    struct stat buffer;
-    return stat(path.c_str(), &buffer) == 0;
   }
 
   void* aligned_alloc(size_t size, size_t alignment) {

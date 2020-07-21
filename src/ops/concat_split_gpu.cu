@@ -6,13 +6,14 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/scatter.h>
 
-#include "../cuda/utils.h"
+#include "cuda/utils.h"
+#include "type_dispatch.h"
 
 namespace ctranslate2 {
   namespace ops {
 
     template <typename T>
-    struct depth_select : public thrust::unary_function<T, T> {
+    struct depth_select {
       T _offset;
       T _depth;
       T _total_depth;
@@ -30,7 +31,7 @@ namespace ctranslate2 {
     };
 
     template <typename T>
-    struct inner_dim_select : public thrust::unary_function<T, T> {
+    struct inner_dim_select {
       T _offset;
       T _inner_dim;
       T _outer_dim;

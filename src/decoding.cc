@@ -5,7 +5,8 @@
 #include <map>
 
 #include "ctranslate2/ops/ops.h"
-#include "./device_dispatch.h"
+#include "device_dispatch.h"
+#include "type_dispatch.h"
 
 namespace ctranslate2 {
 
@@ -57,10 +58,23 @@ namespace ctranslate2 {
 
   static void penalize_token(StorageView& log_probs, const size_t id) {
     DEVICE_DISPATCH(log_probs.device(),
-                    primitives<D>::strided_fill(log_probs.data<float>() + id,
-                                                static_cast<float>(-1e10),
-                                                log_probs.dim(-1),
-                                                log_probs.dim(0)));
+                    TYPE_DISPATCH(log_probs.dtype(),
+                                  primitives<D>::strided_fill(log_probs.data<T>() + id,
+                                                              static_cast<T>(-1e10),
+                                                              log_probs.dim(-1),
+                                                              log_probs.dim(0))));
+  }
+
+  template <typename T>
+  static void initialize_cum_log_probs(StorageView& cum_log_probs,
+                                       const dim_t batch_size,
+                                       const dim_t beam_size) {
+    const dim_t size = batch_size * beam_size;
+    cum_log_probs.resize({size});
+    auto* data = cum_log_probs.data<T>();
+    for (dim_t i = 0; i < size; ++i) {
+      data[i] = (i % beam_size == 0 ? T(0) : std::numeric_limits<T>::lowest());
+    }
   }
 
 
@@ -88,6 +102,7 @@ namespace ctranslate2 {
     const dim_t min_step = start_step + min_length;
     const dim_t max_step = start_step + max_length;
     const Device device = decoder.device();
+    const DataType dtype = decoder.output_type();
     const dim_t batch_size = start_ids.size();
     dim_t cur_batch_size = batch_size;
     const ops::TopK topk_op(_beam_size);
@@ -99,10 +114,9 @@ namespace ctranslate2 {
 
     StorageView gather_indices(DataType::INT32);
     StorageView topk_ids(alive_seq);
-    StorageView topk_scores;
-    StorageView topk_log_probs({_beam_size}, std::numeric_limits<float>::lowest());
-    topk_log_probs.at<float>(0) = 0;
-    tile(topk_log_probs, StorageView({1}, static_cast<int32_t>(batch_size)));
+    StorageView topk_scores(dtype);
+    StorageView topk_log_probs(dtype);
+    TYPE_DISPATCH(dtype, initialize_cum_log_probs<T>(topk_log_probs, batch_size, _beam_size));
 
     using Result = std::pair<std::vector<size_t>, std::vector<std::vector<float>>>;
     std::vector<std::map<float, Result>> hypotheses;
@@ -129,11 +143,11 @@ namespace ctranslate2 {
         (*attention)[i].reserve(num_hypotheses);
     }
 
-    StorageView logits(device);
-    StorageView log_probs(device);
+    StorageView logits(dtype, device);
+    StorageView log_probs(dtype, device);
     StorageView alive_attention;
     StorageView attention_step;
-    StorageView attention_step_device(device);
+    StorageView attention_step_device(dtype, device);
 
     StorageView coverage;
 
@@ -149,16 +163,19 @@ namespace ctranslate2 {
 
       // Multiply by the current beam log probs.
       DEVICE_DISPATCH(log_probs.device(),
-                      primitives<D>::add_depth_broadcast(topk_log_probs.to(device).data<float>(),
-                                                         log_probs.data<float>(),
-                                                         topk_log_probs.size(),
-                                                         log_probs.size()));
+                      TYPE_DISPATCH(log_probs.dtype(),
+                                    primitives<D>::add_depth_broadcast(topk_log_probs.to(device).data<T>(),
+                                                                       log_probs.data<T>(),
+                                                                       topk_log_probs.size(),
+                                                                       log_probs.size())));
 
       // Penalize by the length, if enabled.
       float length_penalty_weight = 1.0;
       if (_length_penalty != 0) {
         length_penalty_weight = std::pow((5.0 + static_cast<float>(step + 1)) / 6.0, _length_penalty);
-        ops::Mul()(log_probs, StorageView(1.f / length_penalty_weight), log_probs);
+        ops::Mul()(log_probs,
+                   StorageView(1.f / length_penalty_weight).to(log_probs.dtype()),
+                   log_probs);
       }
 
       // Penalize end_id, if configured.
@@ -171,12 +188,14 @@ namespace ctranslate2 {
       // TopK candidates.
       sampler(log_probs, topk_ids, topk_scores, _beam_size);
       if (attention || _coverage_penalty != 0)
-        attention_step.copy_from(attention_step_device);
+        attention_step.copy_from(attention_step_device.to_float());
 
       topk_log_probs = topk_scores;
       // Recover the true log probs if length penalty was applied.
       if (_length_penalty != 0)
-        ops::Mul()(topk_log_probs, StorageView(length_penalty_weight), topk_log_probs);
+        ops::Mul()(topk_log_probs,
+                   StorageView(length_penalty_weight).to(topk_log_probs.dtype()),
+                   topk_log_probs);
 
       // Unflatten the ids.
       gather_indices.resize({cur_batch_size * _beam_size});
@@ -217,7 +236,7 @@ namespace ctranslate2 {
         tmp.reshape({row, col});
         ops::MatMul()(tmp, StorageView({col, 1}, 1.0f), penalty);
         ops::Mul()(penalty, StorageView(_coverage_penalty), penalty);
-        ops::Add()(penalty, topk_scores, topk_scores);
+        ops::Add()(penalty.to(topk_scores.dtype()), topk_scores, topk_scores);
       }
 
       if (attention) {
@@ -245,9 +264,9 @@ namespace ctranslate2 {
               || step + 1 == max_step) {
             if (k == 0)
               top_beam_finished[i] = true;
-            float score = topk_scores.at<float>({i, k});
+            float score = topk_scores.scalar_at<float>({i, k});
             // Prevent this beam from advancing in the next step.
-            topk_log_probs.at<float>({i, k}) = -1e10;
+            TYPE_DISPATCH(dtype, topk_log_probs.at<T>({i, k}) = T(-1e10));
             // Save the finished hypothesis only if it is still a candidate.
             if (hypotheses[batch_id].size() < num_hypotheses
                 || -score < hypotheses[batch_id].rbegin()->first) {
@@ -373,6 +392,7 @@ namespace ctranslate2 {
     const dim_t min_step = start_step + min_length;
     const dim_t max_step = start_step + max_length;
     const Device device = decoder.device();
+    const DataType dtype = decoder.output_type();
     const dim_t batch_size = start_ids.size();
     StorageView sample_from({batch_size, 1},
                             std::vector<int32_t>(start_ids.begin(), start_ids.end()));
@@ -388,8 +408,8 @@ namespace ctranslate2 {
       attention->resize(batch_size);
     }
 
-    StorageView logits(device);
-    StorageView log_probs(device);
+    StorageView logits(dtype, device);
+    StorageView log_probs(dtype, device);
     StorageView alive({batch_size}, DataType::INT32);
     std::vector<bool> finished(batch_size, false);
     std::vector<dim_t> batch_offset(batch_size);
@@ -403,9 +423,9 @@ namespace ctranslate2 {
     }
 
     StorageView best_ids( DataType::INT32);
-    StorageView best_probs;
+    StorageView best_probs(dtype);
     StorageView attention_step;
-    StorageView attention_step_device(device);
+    StorageView attention_step_device(dtype, device);
 
     for (dim_t step = start_step; step < max_step; ++step) {
       decoder(step,
@@ -427,7 +447,7 @@ namespace ctranslate2 {
 
       sampler(log_probs, best_ids, best_probs);
       if (attention)
-        attention_step.copy_from(attention_step_device);
+        attention_step.copy_from(attention_step_device.to_float());
 
       std::vector<bool> finished_batch(log_probs.dim(0), false);
       bool one_finished = false;
@@ -504,14 +524,21 @@ namespace ctranslate2 {
   }
 
   template <typename T>
-  static std::vector<std::vector<T>> batch_to_hypotheses(std::vector<std::vector<T>>& array) {
+  static std::vector<std::vector<T>> unflatten_hypotheses(std::vector<std::vector<T>> array,
+                                                          const size_t batch_size,
+                                                          const size_t num_hypotheses) {
+    // Reshape array from batch_size*num_hypotheses x 1 to batch_size x num_hypotheses.
     if (array.empty())
       return array;
     std::vector<std::vector<T>> new_array;
-    new_array.emplace_back();
-    new_array.front().reserve(array.size());
-    for (auto& vector : array) {
-      new_array.front().emplace_back(std::move(vector[0]));
+    new_array.reserve(batch_size);
+    for (size_t b = 0; b < batch_size; ++b) {
+      std::vector<T> hypotheses;
+      hypotheses.reserve(num_hypotheses);
+      for (size_t i = 0; i < num_hypotheses; ++i) {
+        hypotheses.emplace_back(std::move(array[b * num_hypotheses + i][0]));
+      }
+      new_array.emplace_back(std::move(hypotheses));
     }
     return new_array;
   }
@@ -531,6 +558,7 @@ namespace ctranslate2 {
          const bool return_alternatives,
          const bool return_scores,
          const bool return_attention) {
+    const size_t batch_size = start_ids.size();
     dim_t start_step = 0;
 
     // Forward target prefix, if set (only batch_size = 1 for now).
@@ -574,9 +602,12 @@ namespace ctranslate2 {
                                         num_hypotheses);
 
       // The next input is the words we just expanded.
-      start_ids.resize(num_hypotheses);
-      for (size_t i = 0; i < num_hypotheses; ++i)
-        start_ids[i] = expanded_ids[0][i].back();
+      start_ids.resize(batch_size * num_hypotheses);
+      for (size_t b = 0; b < batch_size; ++b) {
+        for (size_t i = 0; i < num_hypotheses; ++i) {
+          start_ids[b * num_hypotheses + i] = expanded_ids[b][i].back();
+        }
+      }
       start_step += 1;
       max_length = std::max(max_length - 1, dim_t(0));
       min_length = std::max(min_length - 1, dim_t(0));
@@ -600,14 +631,13 @@ namespace ctranslate2 {
                            return_alternatives ? 1 : num_hypotheses);
 
     if (return_alternatives) {
-      // We convert outputs from shape num_hypotheses x 1 to 1 x num_hypotheses.
-      sampled_ids = batch_to_hypotheses(sampled_ids);
-      scores = batch_to_hypotheses(scores);
-      attention = batch_to_hypotheses(attention);
+      // Convert outputs from shape batch_size*num_hypotheses x 1 to batch_size x num_hypotheses.
+      sampled_ids = unflatten_hypotheses(std::move(sampled_ids), batch_size, num_hypotheses);
+      scores = unflatten_hypotheses(std::move(scores), batch_size, num_hypotheses);
+      attention = unflatten_hypotheses(std::move(attention), batch_size, num_hypotheses);
     }
 
     // Build results.
-    const size_t batch_size = sampled_ids.size();
     std::vector<GenerationResult<size_t>> results;
     results.reserve(batch_size);
     for (size_t i = 0; i < batch_size; ++i) {

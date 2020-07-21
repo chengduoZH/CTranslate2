@@ -12,7 +12,7 @@ namespace ctranslate2 {
     class TransformerModel : public SequenceToSequenceModel
     {
     public:
-      TransformerModel(const std::string& path, size_t spec_revision, size_t num_heads = 0);
+      TransformerModel(ModelReader& model_reader, size_t spec_revision, size_t num_heads = 0);
       size_t num_heads() const;
       bool with_relative_position() const;
       size_t current_spec_revision() const override;
@@ -36,7 +36,10 @@ namespace ctranslate2 {
       PositionEncoder(const TransformerModel& model, const std::string& scope);
       void operator()(StorageView& input, dim_t index = 0);
     private:
-      const StorageView& get_position_encoding(dim_t max_time, dim_t depth, Device device);
+      const StorageView& get_position_encoding(dim_t max_time,
+                                               dim_t depth,
+                                               Device device,
+                                               DataType dtype);
       const StorageView* _model_encoding;
       std::unique_ptr<StorageView> _generated_encoding;
     };
@@ -89,6 +92,7 @@ namespace ctranslate2 {
     {
     public:
       TransformerEncoder(const TransformerModel& model, const std::string& scope);
+      DataType output_type() const override;
       void operator()(const StorageView& ids,
                       const StorageView& lengths,
                       StorageView& output) override;
@@ -105,6 +109,7 @@ namespace ctranslate2 {
       TransformerDecoder(const TransformerModel& model,
                          const std::string& scope,
                          const bool with_encoder_attention = true);
+      DataType output_type() const override;
       void set_vocabulary_mask(const StorageView& ids) override;
       void reset_vocabulary_mask() override;
       layers::DecoderState initial_state() const override;

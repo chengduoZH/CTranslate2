@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "type_dispatch.h"
+
 namespace ctranslate2 {
   namespace layers {
 
@@ -31,15 +33,16 @@ namespace ctranslate2 {
                                                      const StorageView& b,
                                                      StorageView& c) {
       const Device device = a.device();
+      const DataType dtype = a.dtype();
       const dim_t batch = a.dim(0);
       const dim_t head = a.dim(1);
       const dim_t time = a.dim(2);
 
-      StorageView a_t(device);
+      StorageView a_t(dtype, device);
       ops::Transpose({2, 0, 1, 3})(a, a_t);
       a_t.reshape({time, batch * head, -1});
 
-      StorageView c_t(device);
+      StorageView c_t(dtype, device);
       matmul_op(a_t, b, c_t);
       c_t.reshape({time, batch, head, -1});
       ops::Transpose({1, 2, 0, 3})(c_t, c);
@@ -51,11 +54,12 @@ namespace ctranslate2 {
                                              const ops::MatMul& matmul_op,
                                              StorageView& dot) {
       const Device device = queries.device();
+      const DataType dtype = queries.dtype();
 
-      StorageView relative_representations(device);
+      StorageView relative_representations(dtype, device);
       ops::Gather()(relative_values, relative_positions, relative_representations);
 
-      StorageView dot_relative(device);
+      StorageView dot_relative(dtype, device);
       matmul_with_relative_representations(matmul_op,
                                            queries,
                                            relative_representations,
@@ -94,13 +98,16 @@ namespace ctranslate2 {
                                      keys_matmul,
                                      output);
 
-      StorageView attn(values.device());
+      StorageView attn(values.dtype(), values.device());
       ops::SoftMax()(output, values_lengths, attn);
       if (attention != nullptr) {
         // Transpose attn to make first head data contiguous.
         ops::Transpose({1, 0, 2, 3})(attn, output);
         attention->resize({attn.dim(0), attn.dim(2), attn.dim(3)});
-        attention->copy_from(output.data<float>(), attention->size(), attention->device());
+        TYPE_DISPATCH(output.dtype(),
+                      attention->copy_from(output.data<T>(),
+                                           attention->size(),
+                                           attention->device()));
       }
 
       const ops::MatMul values_matmul;
@@ -128,15 +135,21 @@ namespace ctranslate2 {
     MultiHeadAttention::MultiHeadAttention(const models::Model& model,
                                            const std::string& scope,
                                            dim_t num_heads,
-                                           bool self_attention)
+                                           bool self_attention,
+                                           LayerNormStrategy layer_norm_strategy)
       : _num_heads(num_heads)
       , _linear(make_linear_layers(model, scope, self_attention))
+      , _layer_norm_strategy(layer_norm_strategy)
       , _layer_norm(model, scope + "/layer_norm")
       , _relative_position_keys(model.get_variable_if_exists(scope + "/relative_position_keys"))
       , _relative_position_values(model.get_variable_if_exists(scope + "/relative_position_values"))
       , _maximum_relative_position(_relative_position_keys
                                    ? (_relative_position_keys->dim(0) - 1) / 2 : 0)
       , _transpose_op({0, 2, 1, 3}) {
+    }
+
+    DataType MultiHeadAttention::output_type() const {
+      return _layer_norm.output_type();
     }
 
     void MultiHeadAttention::operator()(const StorageView& queries,
@@ -147,17 +160,22 @@ namespace ctranslate2 {
                                         StorageView* cached_values,
                                         StorageView* attention) const {
       PROFILE("MultiHeadAttention");
-      Device device = queries.device();
-      StorageView fused_proj(device);
-      StorageView queries_proj(device);
-      StorageView keys_proj(device);
-      StorageView values_proj(device);
-      StorageView split_queries(device);
-      StorageView split_keys(device);
-      StorageView split_values(device);
+      const Device device = queries.device();
+      const DataType dtype = queries.dtype();
+      StorageView fused_proj(dtype, device);
+      StorageView queries_proj(dtype, device);
+      StorageView keys_proj(dtype, device);
+      StorageView values_proj(dtype, device);
+      StorageView split_queries(dtype, device);
+      StorageView split_keys(dtype, device);
+      StorageView split_values(dtype, device);
 
-      _layer_norm(queries, queries_proj);
-      _linear[0](queries_proj, fused_proj);
+      if (_layer_norm_strategy == LayerNormStrategy::Input) {
+        _layer_norm(queries, queries_proj);
+        _linear[0](queries_proj, fused_proj);
+      } else {
+        _linear[0](queries, fused_proj);
+      }
 
       if (memory) {
         split_heads(fused_proj, split_queries);
@@ -168,8 +186,8 @@ namespace ctranslate2 {
           split_heads(values_proj, split_values);
 
           if (cached_keys != nullptr) {
-            swap(*cached_keys, split_keys);
-            swap(*cached_values, split_values);
+            *cached_keys = std::move(split_keys);
+            *cached_values = std::move(split_values);
             split_keys.shallow_copy(*cached_keys);
             split_values.shallow_copy(*cached_values);
           }
@@ -185,13 +203,13 @@ namespace ctranslate2 {
 
         if (cached_keys != nullptr) {
           if (cached_keys->empty()) {
-            swap(*cached_keys, split_keys);
-            swap(*cached_values, split_values);
+            *cached_keys = std::move(split_keys);
+            *cached_values = std::move(split_values);
           } else {
             StorageView& tmp = keys_proj;  // Reuse storage.
-            swap(*cached_keys, tmp);
+            tmp = std::move(*cached_keys);
             ops::Concat(2)({&tmp, &split_keys}, *cached_keys);
-            swap(*cached_values, tmp);
+            tmp = std::move(*cached_values);
             ops::Concat(2)({&tmp, &split_values}, *cached_values);
           }
           split_keys.shallow_copy(*cached_keys);
@@ -220,13 +238,16 @@ namespace ctranslate2 {
 
       _linear.back()(combined, output);
       ops::Add()(queries, output, output);
+      if (_layer_norm_strategy == LayerNormStrategy::Output) {
+        _layer_norm(output, output);
+      }
     }
 
-    void MultiHeadAttention::split_heads(const StorageView& x, StorageView& y) const {
-      const StorageView z({x.dim(0), x.dim(1), _num_heads, x.dim(2) / _num_heads},
-                          const_cast<float*>(x.data<float>()),
-                          x.device());
-      _transpose_op(z, y);
+    void MultiHeadAttention::split_heads(StorageView& x, StorageView& y) const {
+      const Shape original_shape = x.shape();
+      x.reshape({x.dim(0), x.dim(1), _num_heads, x.dim(2) / _num_heads});
+      _transpose_op(x, y);
+      x.reshape(original_shape);
     }
 
     void MultiHeadAttention::combine_heads(const StorageView& x, StorageView& y) const {

@@ -12,10 +12,12 @@ namespace ctranslate2 {
   bool string_to_bool(const std::string& str);
   std::string read_string_from_env(const char* var, const std::string& default_value = "");
   bool read_bool_from_env(const char* var, const bool default_value = false);
+  int read_int_from_env(const char* var, const int default_value = 0);
 
   bool verbose_mode();
 
   // Check feature support.
+  bool mayiuse_float16(Device device, int device_index = 0);
   bool mayiuse_int16(Device device, int device_index = 0);
   bool mayiuse_int8(Device device, int device_index = 0);
 
@@ -27,8 +29,6 @@ namespace ctranslate2 {
   std::vector<std::string> split_string(const std::string& str, char delimiter);
 
   std::mt19937& get_random_generator();
-
-  bool file_exists(const std::string& path);
 
   void* aligned_alloc(size_t size, size_t alignment);
   void aligned_free(void* ptr);

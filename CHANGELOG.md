@@ -4,6 +4,38 @@
 
 ### Fixes and improvements
 
+## [v1.12.1](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.12.1) (2020-07-20)
+
+### Fixes and improvements
+
+* Fix implicit int16 to float16 model conversion on compatible GPUs
+
+## [v1.12.0](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.12.0) (2020-07-16)
+
+### Changes
+
+* Docker images based on Ubuntu 16.04 are no longer updated
+
+### New features
+
+* Support `float16` data type for model conversion (with `--quantization float16`) and computation (with `--compute_type float16`). FP16 execution can improve performance by up to 50% on NVIDIA GPUs with Compute Capability >= 7.0.
+* Add Docker images with newer CUDA versions, which can improve performance in some cases:
+  * `latest-ubuntu18-cuda10.0` (same as `latest-ubuntu18-gpu`)
+  * `latest-ubuntu18-cuda10.1`
+  * `latest-ubuntu18-cuda10.2`
+  * `latest-centos7-cuda10.0` (same as `latest-centos7-gpu`)
+  * `latest-centos7-cuda10.1`
+  * `latest-centos7-cuda10.2`
+* Allow setting a computation type per device (e.g. `Translator(..., compute_type={"cuda": "float16", "cpu": "int8"})` with the Python API)
+* [C++] Add `ModelReader` interface to customize model loading
+
+### Fixes and improvements
+
+* Optimize Transpose op on CPU for the permutation used in multi-head attention
+* Optimize GELU op CPU with Intel MKL
+* Fix compilation when targeting an architecture and disabling ISA dispatch (e.g.: `-DCMAKE_CXX_FLAGS="-march=skylake" -DENABLE_CPU_DISPATCH=OFF`)
+* Inline some frequently called methods
+
 ## [v1.11.0](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.11.0) (2020-06-29)
 
 ### New features
