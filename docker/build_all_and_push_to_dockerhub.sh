@@ -34,12 +34,13 @@ build()
     if [ $PUSH -eq 1 ]; then
         docker push $LATEST
     fi
-    if [ "$TAGGED" != "$LATEST" ]; then
-        docker tag $LATEST $TAGGED
-        if [ $PUSH -eq 1 ]; then
-            docker push $TAGGED
-        fi
-    fi
+#    if [ "$TAGGED" != "$LATEST" ]; then
+#        docker tag $LATEST $TAGGED
+#        if [ $PUSH -eq 1 ]; then
+#            docker push $TAGGED
+#        fi
+#    fi
+    docker rmi $LATEST
 }
 
 build Dockerfile.centos7.dev centos7.dev
