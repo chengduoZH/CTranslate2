@@ -185,10 +185,11 @@ namespace ctranslate2 {
 
     void TransformerEncoderLayer::operator()(const StorageView& input,
                                              const StorageView& lengths,
-                                             StorageView& output) const {
+                                             StorageView& output,
+                                             const Padder* padder) const {
       PROFILE("TransformerEncoderLayer");
       StorageView context(input.dtype(), input.device());
-      _self_attention(input, nullptr, &lengths, context);
+      _self_attention(input, nullptr, &lengths, context, nullptr, nullptr, nullptr, padder);
       _ff(context, output);
     }
 
@@ -217,14 +218,15 @@ namespace ctranslate2 {
                                              StorageView* cached_attn_keys,
                                              StorageView* cached_attn_values,
                                              StorageView& output,
-                                             StorageView* attention) const {
+                                             StorageView* attention,
+                                             const Padder* padder) const {
       PROFILE("TransformerDecoderLayer");
       StorageView context(input.dtype(), input.device());
       if (_encoder_attention) {
         _self_attention(input, nullptr, nullptr, output,
                         &cached_self_attn_keys, &cached_self_attn_values);
         (*_encoder_attention)(output, memory, memory_lengths, context,
-                              cached_attn_keys, cached_attn_values, attention);
+                              cached_attn_keys, cached_attn_values, attention, padder);
       } else {
         _self_attention(input, nullptr, nullptr, context,
                         &cached_self_attn_keys, &cached_self_attn_values);
@@ -256,6 +258,10 @@ namespace ctranslate2 {
       return _output_norm.output_type();
     }
 
+    dim_t TransformerEncoder::output_size() const {
+      return _output_norm.output_size();
+    }
+
     void TransformerEncoder::operator()(const StorageView& ids,
                                         const StorageView& lengths,
                                         StorageView& output) {
@@ -265,12 +271,21 @@ namespace ctranslate2 {
       if (_position_encoder)
         (*_position_encoder)(input);
 
+      // Remove padding to reduce the amount of computation.
+      std::unique_ptr<Padder> padder;
+      if (Padder::allow_padding_removal(output.device(), output.dtype())) {
+        padder.reset(new Padder(lengths, input.dim(1)));
+        padder->remove_padding(input);
+      }
+
       for (size_t l = 0; l < _layers.size(); ++l) {
-        (*_layers[l])(input, lengths, output);
+        (*_layers[l])(input, lengths, output, padder.get());
         if (l + 1 < _layers.size())
           input = std::move(output);
       }
       _output_norm(output, output);
+      if (padder)
+        padder->add_padding(output);
     }
 
 
@@ -301,6 +316,10 @@ namespace ctranslate2 {
 
     DataType TransformerDecoder::output_type() const {
       return _proj.output_type();
+    }
+
+    dim_t TransformerDecoder::output_size() const {
+      return _proj.output_size();
     }
 
     void TransformerDecoder::set_vocabulary_mask(const StorageView& ids) {
@@ -344,11 +363,18 @@ namespace ctranslate2 {
       if (_position_encoder)
         (*_position_encoder)(layer_in, step);
 
-      const StorageView* memory = nullptr;
+      StorageView* memory = nullptr;
       const StorageView* memory_lengths = nullptr;
+      std::unique_ptr<Padder> memory_padder;
       if (_with_encoder_attention) {
-        memory = &state.at("memory");
         memory_lengths = &state.at("memory_lengths");
+        if (step == 0) {
+          memory = &state.at("memory");
+          if (Padder::allow_padding_removal(memory->device(), memory->dtype())) {
+            memory_padder.reset(new Padder(*memory_lengths, memory->dim(1)));
+            memory_padder->remove_padding(*memory);
+          }
+        }
       }
 
       for (size_t l = 0; l < _layers.size(); ++l) {
@@ -361,8 +387,14 @@ namespace ctranslate2 {
                       _with_encoder_attention ? &state.at("memory_keys_" + l_str) : nullptr,
                       _with_encoder_attention ? &state.at("memory_values_" + l_str) : nullptr,
                       layer_out,
-                      l + 1 == _layers.size() ? attention : nullptr);
+                      l + 1 == _layers.size() ? attention : nullptr,
+                      memory_padder.get());
         layer_in = std::move(layer_out);
+      }
+
+      if (step == 0) {
+        // The memory is no longer needed as its projections were cached in the first step.
+        state.erase("memory");
       }
 
       if (logits) {

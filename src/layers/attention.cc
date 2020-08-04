@@ -138,6 +138,7 @@ namespace ctranslate2 {
                                            bool self_attention,
                                            LayerNormStrategy layer_norm_strategy)
       : _num_heads(num_heads)
+      , _self_attention(self_attention)
       , _linear(make_linear_layers(model, scope, self_attention))
       , _layer_norm_strategy(layer_norm_strategy)
       , _layer_norm(model, scope + "/layer_norm")
@@ -145,11 +146,16 @@ namespace ctranslate2 {
       , _relative_position_values(model.get_variable_if_exists(scope + "/relative_position_values"))
       , _maximum_relative_position(_relative_position_keys
                                    ? (_relative_position_keys->dim(0) - 1) / 2 : 0)
+      , _queries_scale(1.f / std::sqrt(static_cast<float>(_layer_norm.output_size() / num_heads)))
       , _transpose_op({0, 2, 1, 3}) {
     }
 
     DataType MultiHeadAttention::output_type() const {
       return _layer_norm.output_type();
+    }
+
+    dim_t MultiHeadAttention::output_size() const {
+      return _layer_norm.output_size();
     }
 
     void MultiHeadAttention::operator()(const StorageView& queries,
@@ -158,7 +164,8 @@ namespace ctranslate2 {
                                         StorageView& output,
                                         StorageView* cached_keys,
                                         StorageView* cached_values,
-                                        StorageView* attention) const {
+                                        StorageView* attention,
+                                        const Padder* padder) const {
       PROFILE("MultiHeadAttention");
       const Device device = queries.device();
       const DataType dtype = queries.dtype();
@@ -177,11 +184,16 @@ namespace ctranslate2 {
         _linear[0](queries, fused_proj);
       }
 
-      if (memory) {
+      if (!_self_attention) {
         split_heads(fused_proj, split_queries);
         if (cached_keys == nullptr || cached_keys->empty()) {
           _linear[1](*memory, fused_proj);
           ops::Split(-1)(fused_proj, keys_proj, values_proj);
+          if (padder) {
+            // From now on the time dimension is required.
+            padder->add_padding(keys_proj);
+            padder->add_padding(values_proj);
+          }
           split_heads(keys_proj, split_keys);
           split_heads(values_proj, split_values);
 
@@ -197,6 +209,12 @@ namespace ctranslate2 {
         }
       } else {
         ops::Split(-1)(fused_proj, queries_proj, keys_proj, values_proj);
+        if (padder) {
+          // From now on the time dimension is required.
+          padder->add_padding(queries_proj);
+          padder->add_padding(keys_proj);
+          padder->add_padding(values_proj);
+        }
         split_heads(queries_proj, split_queries);
         split_heads(keys_proj, split_keys);
         split_heads(values_proj, split_values);
@@ -217,9 +235,6 @@ namespace ctranslate2 {
         }
       }
 
-      const dim_t dk = queries.dim(-1) / _num_heads;
-      const float queries_scale = 1.0 / sqrt(dk);
-
       StorageView& context = queries_proj;  // Reuse storage.
       dot_product_attention(split_queries,
                             split_keys,
@@ -230,11 +245,16 @@ namespace ctranslate2 {
                             _maximum_relative_position,
                             context,
                             attention,
-                            queries_scale,
+                            _queries_scale,
                             bool(cached_keys));
 
       StorageView& combined = values_proj;  // Reuse storage.
       combine_heads(context, combined);
+
+      if (padder) {
+        // The time dimension is no longer needed.
+        padder->remove_padding(combined);
+      }
 
       _linear.back()(combined, output);
       ops::Add()(queries, output, output);

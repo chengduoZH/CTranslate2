@@ -35,9 +35,9 @@ ctranslate2_module = Extension(
 
 setup(
     name="ctranslate2",
-    version="1.12.1",
+    version="1.13.0",
     license="MIT",
-    description="Optimized inference engine for OpenNMT models",
+    description="Fast inference engine for OpenNMT models",
     long_description=_get_long_description(),
     long_description_content_type="text/markdown",
     author="OpenNMT",

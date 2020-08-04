@@ -3,6 +3,7 @@
 // This file defines the execution engine for a TransformerSpec model.
 
 #include "ctranslate2/layers/layers.h"
+#include "ctranslate2/padder.h"
 
 #include "sequence_to_sequence.h"
 
@@ -61,7 +62,8 @@ namespace ctranslate2 {
       TransformerEncoderLayer(const TransformerModel& model, const std::string& scope);
       void operator()(const StorageView& input,
                       const StorageView& lengths,
-                      StorageView& output) const;
+                      StorageView& output,
+                      const Padder* padder = nullptr) const;
     private:
       const layers::MultiHeadAttention _self_attention;
       const TransformerFeedForward _ff;
@@ -81,7 +83,8 @@ namespace ctranslate2 {
                       StorageView* cached_attn_keys,
                       StorageView* cached_attn_values,
                       StorageView& output,
-                      StorageView* attention = nullptr) const;
+                      StorageView* attention = nullptr,
+                      const Padder* padder = nullptr) const;
     private:
       const layers::MultiHeadAttention _self_attention;
       const std::unique_ptr<const layers::MultiHeadAttention> _encoder_attention;
@@ -93,6 +96,7 @@ namespace ctranslate2 {
     public:
       TransformerEncoder(const TransformerModel& model, const std::string& scope);
       DataType output_type() const override;
+      dim_t output_size() const override;
       void operator()(const StorageView& ids,
                       const StorageView& lengths,
                       StorageView& output) override;
@@ -110,6 +114,7 @@ namespace ctranslate2 {
                          const std::string& scope,
                          const bool with_encoder_attention = true);
       DataType output_type() const override;
+      dim_t output_size() const override;
       void set_vocabulary_mask(const StorageView& ids) override;
       void reset_vocabulary_mask() override;
       layers::DecoderState initial_state() const override;
