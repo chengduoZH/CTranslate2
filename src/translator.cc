@@ -9,26 +9,6 @@
 
 namespace ctranslate2 {
 
-  static std::vector<size_t>
-  tokens_to_ids(const std::vector<std::string>& tokens,
-                const Vocabulary& vocab) {
-    std::vector<size_t> ids;
-    ids.reserve(tokens.size());
-    for (const auto& token : tokens)
-      ids.push_back(vocab.to_id(token));
-    return ids;
-  }
-
-  static std::vector<std::vector<size_t>>
-  tokens_to_ids(const std::vector<std::vector<std::string>>& batch_tokens,
-                const Vocabulary& vocab) {
-    std::vector<std::vector<size_t>> batch_ids;
-    batch_ids.reserve(batch_tokens.size());
-    for (const auto& tokens : batch_tokens)
-      batch_ids.emplace_back(tokens_to_ids(tokens, vocab));
-    return batch_ids;
-  }
-
   template <typename T>
   static std::vector<std::vector<T>>
   sort_from_longest_to_shortest(const std::vector<std::vector<T>>& ids,
@@ -47,36 +27,6 @@ namespace ctranslate2 {
       new_ids.emplace_back(ids[original_index]);
     }
     return new_ids;
-  }
-
-  static std::pair<StorageView, StorageView>
-  make_inputs(const std::vector<std::vector<size_t>>& ids,
-              const Device device,
-              const dim_t length_multiple_of = 1) {
-    const dim_t batch_size = ids.size();
-
-    // Record lengths and maximum length.
-    dim_t max_length = 0;
-    StorageView lengths({batch_size}, DataType::INT32);
-    for (dim_t i = 0; i < batch_size; ++i) {
-      const dim_t length = ids[i].size();
-      lengths.at<int32_t>(i) = length;
-      max_length = std::max(max_length, length);
-    }
-
-    if (max_length % length_multiple_of != 0) {
-      max_length += (length_multiple_of - max_length % length_multiple_of);
-    }
-
-    // Make 2D input.
-    StorageView input({batch_size, max_length}, int32_t(0));
-    for (dim_t i = 0; i < batch_size; ++i) {
-      const dim_t length = ids[i].size();
-      for (dim_t t = 0; t < length; ++t)
-        input.at<int32_t>({i, t}) = ids[i][t];
-    }
-
-    return std::make_pair(input.to(device), lengths.to(device));
   }
 
   static std::unique_ptr<const Sampler> make_sampler(const TranslationOptions& options) {
@@ -328,16 +278,17 @@ namespace ctranslate2 {
     PROFILE("run_batch_translation");
     auto scoped_device_setter = _model->get_scoped_device_setter();
 
-    std::vector<std::vector<size_t>> source_ids = tokens_to_ids(source, *_source_vocabulary);
+    std::vector<std::vector<size_t>> source_ids = _source_vocabulary->to_ids(source);
     std::vector<std::vector<size_t>> target_prefix_ids;
     if (target_prefix)
-      target_prefix_ids = tokens_to_ids(*target_prefix, *_target_vocabulary);
+      target_prefix_ids = _target_vocabulary->to_ids(*target_prefix);
 
     const Device device = _model->device();
     const DataType dtype = _encoder->output_type();
-    std::pair<StorageView, StorageView> inputs = make_inputs(source_ids,
-                                                             device,
-                                                             dtype == DataType::FLOAT16 ? 8 : 1);
+    std::pair<StorageView, StorageView> inputs = layers::make_sequence_inputs(
+      source_ids,
+      device,
+      dtype == DataType::FLOAT16 ? 8 : 1);
     StorageView& ids = inputs.first;
     StorageView& lengths = inputs.second;
 

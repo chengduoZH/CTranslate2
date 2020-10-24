@@ -20,16 +20,15 @@ namespace ctranslate2 {
       worker.join();
   }
 
-  std::future<TranslationOutput> TranslatorPool::post(const TranslationInput& source,
-                                                      const TranslationOptions& options,
+  std::future<TranslationOutput> TranslatorPool::post(TranslationInput source,
+                                                      TranslationOptions options,
                                                       bool blocking) {
-    TranslationInput target_prefix;
-    return post(source, target_prefix, options, blocking);
+    return post(std::move(source), TranslationInput(), std::move(options), blocking);
   }
 
-  std::future<TranslationOutput> TranslatorPool::post(const TranslationInput& source,
-                                                      const TranslationInput& target_prefix,
-                                                      const TranslationOptions& options,
+  std::future<TranslationOutput> TranslatorPool::post(TranslationInput source,
+                                                      TranslationInput target_prefix,
+                                                      TranslationOptions options,
                                                       bool blocking) {
     std::unique_lock<std::mutex> lock(_mutex);
     if (blocking)
@@ -38,7 +37,9 @@ namespace ctranslate2 {
     // locked again here
 
     _work.emplace(std::piecewise_construct,
-                  std::forward_as_tuple(source, target_prefix, options),
+                  std::forward_as_tuple(std::move(source),
+                                        std::move(target_prefix),
+                                        std::move(options)),
                   std::forward_as_tuple());
 
     std::future<TranslationOutput> future = _work.back().second.get_future();
@@ -144,23 +145,32 @@ namespace ctranslate2 {
       throw std::runtime_error("failed to open output file " + file);
   }
 
-  TranslationStats TranslatorPool::consume_text_file(const std::string& in_file,
-                                                     const std::string& out_file,
+  TranslationStats TranslatorPool::consume_text_file(const std::string& source_file,
+                                                     const std::string& output_file,
                                                      size_t read_batch_size,
                                                      const TranslationOptions& options,
-                                                     bool with_scores) {
-    std::ifstream in;
-    open_input_file(in_file, in);
-    std::ofstream out;
-    open_output_file(out_file, out);
-    return consume_text_file(in, out, read_batch_size, options, with_scores);
+                                                     bool with_scores,
+                                                     const std::string* target_file) {
+    std::ifstream source;
+    open_input_file(source_file, source);
+    std::ofstream output;
+    open_output_file(output_file, output);
+
+    std::unique_ptr<std::ifstream> target;
+    if (target_file) {
+      target.reset(new std::ifstream());
+      open_input_file(*target_file, *target);
+    }
+
+    return consume_text_file(source, output, read_batch_size, options, with_scores, target.get());
   }
 
-  TranslationStats TranslatorPool::consume_text_file(std::istream& in,
-                                                     std::ostream& out,
+  TranslationStats TranslatorPool::consume_text_file(std::istream& source,
+                                                     std::ostream& output,
                                                      size_t read_batch_size,
                                                      const TranslationOptions& options,
-                                                     bool with_scores) {
+                                                     bool with_scores,
+                                                     std::istream* target) {
     const auto tokenizer = [](const std::string& text) {
       return split_string(text, ' ');
     };
@@ -175,8 +185,10 @@ namespace ctranslate2 {
       return text;
     };
 
-    return consume_raw_text_file(in,
-                                 out,
+    return consume_raw_text_file(source,
+                                 target,
+                                 output,
+                                 tokenizer,
                                  tokenizer,
                                  detokenizer,
                                  read_batch_size,
