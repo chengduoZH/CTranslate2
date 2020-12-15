@@ -28,14 +28,14 @@ _maybe_add_library_root("CTRANSLATE2")
 ctranslate2_module = Extension(
     "ctranslate2.translator",
     sources=["translator.cc"],
-    extra_compile_args=["-std=c++11"],
+    extra_compile_args=["-std=c++17"],
     include_dirs=include_dirs,
     library_dirs=library_dirs,
     libraries=["ctranslate2"])
 
 setup(
     name="ctranslate2",
-    version="1.14.0",
+    version="1.16.2",
     license="MIT",
     description="Fast inference engine for OpenNMT models",
     long_description=_get_long_description(),
@@ -45,11 +45,17 @@ setup(
     url="https://opennmt.net",
     classifiers=[
         "Development Status :: 5 - Production/Stable",
+        "Environment :: GPU :: NVIDIA CUDA :: 10.1",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3 :: Only",
+        "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
         "Topic :: Scientific/Engineering :: Artificial Intelligence"
     ],
     project_urls={
@@ -60,9 +66,9 @@ setup(
     keywords="opennmt nmt neural machine translation cuda mkl inference quantization",
     packages=find_packages(exclude=["bin"]),
     ext_modules=[ctranslate2_module],
+    python_requires=">=3.5",
     install_requires=[
         "numpy",
-        "six",
     ],
     entry_points={
         "console_scripts": [

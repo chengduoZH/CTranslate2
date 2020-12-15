@@ -484,7 +484,7 @@ namespace ctranslate2 {
         (*attention)[i].resize(1);
     }
 
-    StorageView best_ids( DataType::INT32);
+    StorageView best_ids(DataType::INT32);
     StorageView best_probs(dtype);
     StorageView attention_step;
     StorageView attention_step_device(dtype, device);
@@ -563,11 +563,11 @@ namespace ctranslate2 {
     }
   }
 
-  void initialize_decoder_with_prefix(layers::Decoder& decoder,
-                                      layers::DecoderState& state,
-                                      const std::vector<size_t>& start_ids,
-                                      const std::vector<size_t>& prefix_ids,
-                                      std::vector<std::vector<float>>* prefix_attention) {
+  static void initialize_decoder_with_prefix(layers::Decoder& decoder,
+                                             layers::DecoderState& state,
+                                             const std::vector<size_t>& start_ids,
+                                             const std::vector<size_t>& prefix_ids,
+                                             std::vector<std::vector<float>>* prefix_attention) {
     const Device device = decoder.device();
     const size_t prefix_size = prefix_ids.size();
 

@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.com/OpenNMT/CTranslate2.svg?branch=master)](https://travis-ci.com/OpenNMT/CTranslate2) [![PyPI version](https://badge.fury.io/py/ctranslate2.svg)](https://badge.fury.io/py/ctranslate2) [![Gitter](https://badges.gitter.im/OpenNMT/CTranslate2.svg)](https://gitter.im/OpenNMT/CTranslate2?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![CI](https://github.com/OpenNMT/CTranslate2/workflows/CI/badge.svg)](https://github.com/OpenNMT/CTranslate2/actions?query=workflow%3ACI) [![PyPI version](https://badge.fury.io/py/ctranslate2.svg)](https://badge.fury.io/py/ctranslate2) [![Gitter](https://badges.gitter.im/OpenNMT/CTranslate2.svg)](https://gitter.im/OpenNMT/CTranslate2?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
 # CTranslate2
 
@@ -21,12 +21,12 @@ The project is production-oriented and comes with [backward compatibility guaran
 
 ## Key features
 
-* **Fast and efficient runtime**<br/>The runtime aims to be faster and lighter than a general-purpose deep learning framework: it is [up to 4x faster](#benchmarks) than OpenNMT-py on standard translation tasks.
+* **Fast and efficient execution**<br/>The execution [is significantly faster and requires less resources](#benchmarks) than general-purpose deep learning frameworks on supported models and tasks.
 * **Quantization and reduced precision**<br/>The model serialization and computation support weights with reduced precision: 16-bit floating points (FP16), 16-bit integers, and 8-bit integers.
 * **Parallel translations**<br/>CPU translations can be run efficiently in parallel without duplicating the model data in memory.
 * **Dynamic memory usage**<br/>The memory usage changes dynamically depending on the request size while still meeting performance requirements thanks to caching allocators on both CPU and GPU.
 * **Automatic CPU detection and code dispatch**<br/>The fastest code path is selected at runtime based on the CPU (Intel or AMD) and the supported instruction set architectures (AVX, AVX2, or AVX512).
-* **Ligthweight on disk**<br/>Models can be quantized below 100MB with minimal accuracy loss. A full featured Docker image supporting GPU and CPU requires less than 1GB.
+* **Ligthweight on disk**<br/>Models can be quantized below 100MB with minimal accuracy loss. A full featured Docker image supporting GPU and CPU requires less than 400MB.
 * **Simple integration**<br/>The project has few dependencies and exposes [translation APIs](#translating) in Python and C++ to cover most integration needs.
 * **Interactive decoding**<br/>[Advanced decoding features](docs/decoding.md) allow autocompleting a partial translation and returning alternatives at a specific location in the translation.
 
@@ -49,7 +49,7 @@ See the [Decoding](docs/decoding.md) documentation for examples.
 
 ## Quickstart
 
-The steps below assume a Linux OS and a Python installation.
+The steps below assume a Linux OS and a Python installation (3.5 or above).
 
 1\. **[Install](#installation) the Python package**:
 
@@ -102,12 +102,14 @@ The [`ctranslate2`](https://pypi.org/project/ctranslate2/) Python package will g
 pip install ctranslate2
 ```
 
-The package published on PyPI only supports CPU execution at the moment. Consider using a Docker image for GPU support with Python (see below).
+The package published on PyPI supports CPU and GPU execution. All software dependencies are included in the package (including CUDA for GPU support). The only requirements are listed below.
 
 **Requirements:**
 
 * OS: Linux
+* Python version: >= 3.5
 * pip version: >= 19.0
+* GPU driver version: >= 418.39
 
 ### Docker images
 
@@ -120,7 +122,7 @@ docker pull opennmt/ctranslate2:latest-ubuntu18-cuda10.2
 The images include:
 
 * a translation client to directly translate files
-* Python 3 packages (with GPU support)
+* Python 3 packages
 * `libctranslate2.so` library development files
 
 ### Manual compilation
@@ -266,7 +268,6 @@ The project uses [CMake](https://cmake.org/) for compilation. The following opti
 | WITH_CUDA | **OFF**, ON | Compiles with the CUDA backend |
 | WITH_DNNL | **OFF**, ON | Compiles with the oneDNN backend (a.k.a. DNNL) |
 | WITH_MKL | OFF, **ON** | Compiles with the Intel MKL backend |
-| WITH_TENSORRT | OFF, **ON** | Compiles with TensorRT (required for beam search decoding on GPU) |
 | WITH_TESTS | **OFF**, ON | Compiles the tests |
 
 Some build options require external dependencies:
@@ -277,17 +278,12 @@ Some build options require external dependencies:
   * [oneDNN](https://github.com/oneapi-src/oneDNN) (>=1.5)
 * `-DWITH_CUDA=ON` requires:
   * [cuBLAS](https://developer.nvidia.com/cublas) (>=10.0)
-  * `-DWITH_TENSORRT=ON` requires:
-    * [TensorRT](https://developer.nvidia.com/tensorrt) (>=6.0,<7.0)
-    * [cuDNN](https://developer.nvidia.com/cudnn) (>=7.5)
 
 Multiple backends can be enabled for a single build. When building with both Intel MKL and oneDNN, the backend will be selected at runtime based on the CPU information.
 
 ### Example (Ubuntu)
 
-This minimal installation only enables CPU execution with Intel MKL. For more advanced usages and GPU support, see how the [Ubuntu GPU Dockerfile](docker/Dockerfile.ubuntu-gpu) is defined.
-
-#### Install Intel MKL
+#### Install Intel MKL (optional for GPU only builds)
 
 Use the following instructions to install Intel MKL:
 
@@ -297,25 +293,32 @@ apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
 sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
 sudo sh -c 'echo deb https://apt.repos.intel.com/mkl all main > /etc/apt/sources.list.d/intel-mkl.list'
 sudo apt-get update
-sudo apt-get install intel-mkl-64bit-2020.3-111
+sudo apt-get install intel-mkl-64bit-2020.4-912
 ```
 
-Go to https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo for more details.
+See the [Intel MKL documentation](https://software.intel.com/content/www/us/en/develop/tools/math-kernel-library.html) for other installation methods.
+
+#### Install CUDA (optional for CPU only builds)
+
+See the [NVIDIA documentation](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) for information on how to download and install CUDA.
 
 #### Compile
 
 Under the project root, run the following commands:
 
 ```bash
+git submodule update --init
 mkdir build && cd build
-cmake ..
+cmake -DWITH_MKL=ON -DWITH_CUDA=ON ..
 make -j4
 ```
 
-The `cli/translate` binary will be generated. You can try it with the model converted in the [Quickstart](#quickstart) section:
+(If you did not install one of Intel MKL or CUDA, set its corresponding flag to `OFF` in the CMake command line.)
+
+These steps should produce the `cli/translate` binary. You can try it with the model converted in the [Quickstart](#quickstart) section:
 
 ```bash
-echo "▁H ello ▁world !" | ./cli/translate --model ende_ctranslate2/
+echo "▁H ello ▁world !" | ./cli/translate --model ende_ctranslate2/ --device auto
 ```
 
 The result `▁Hallo ▁Welt !` should be displayed.
@@ -338,12 +341,12 @@ cd build && make install && cd ..
 
 # Build and install the Python wheel.
 cd python
-pip install pybind11
+pip install -r install_requirements.txt
 python setup.py bdist_wheel
 pip install dist/*.whl
 
 # Run the tests with pytest.
-pip install pytest
+pip install -r tests/requirements.txt
 pytest tests/test.py
 ```
 
@@ -398,9 +401,10 @@ Executed on a [*c5.2xlarge*](https://aws.amazon.com/ec2/instance-types/c5/) Amaz
 | -- | --- | --- | --- | --- |
 | OpenNMT-tf 2.13.0 | 1780.0 | 2694MB | 1778MB | 26.93 |
 | OpenNMT-py 2.0.0 | 1295.9 | 2706MB | 1930MB | 26.77 |
-| CTranslate2 1.14.0 | 2461.6 | 1498MB | 1284MB | 26.77 |
-| - int8 | 2369.8 | 2516MB | 1286MB | 26.80 |
-| - float16 | **3648.9** | 1230MB | 1300MB | 26.78 |
+| CTranslate2 1.16.1 | 2616.6 | 1144MB | 303MB | 26.77 |
+| - int8 | 3064.1 | 794MB | 323MB | 26.76 |
+| - float16 | 4022.6 | 824MB | 366MB | 26.80 |
+| - float16 + local sorting | **5132.4** | 1060MB | 367MB | 26.75 |
 
 Executed on a [*g4dn.xlarge*](https://aws.amazon.com/ec2/instance-types/g4/) Amazon EC2 instance equipped with a NVIDIA T4 GPU.
 
@@ -491,10 +495,8 @@ We are actively looking to ease this assumption by supporting ONNX as model part
 
 There are many ways to make this project better and even faster. See the open issues for an overview of current and planned features. Here are some things we would like to get to:
 
-* Increased support of INT8 quantization, for example by quantizing more layers
 * Support of running ONNX graphs
 * Optimizations for ARM CPUs
-* Support GPU execution with the Python packages published on PyPI
 
 ### What is the difference between `intra_threads` and `inter_threads`?
 

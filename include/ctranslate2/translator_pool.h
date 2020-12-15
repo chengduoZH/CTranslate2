@@ -50,6 +50,14 @@ namespace ctranslate2 {
                                         TranslationOptions options,
                                         bool blocking=false);
 
+    // Run a translation synchronously.
+    // To benefit from parallelism, you can set max_batch_size in the translation options:
+    // the input will be split according to this value and each batch will be translated
+    // in parallel.
+    TranslationOutput translate_batch(const TranslationInput& source,
+                                      const TranslationInput& target_prefix,
+                                      TranslationOptions options);
+
     // Translate a stream in parallel.
     // Results will be written in order as they are available so the stream content is
     // never stored fully in memory
@@ -86,30 +94,22 @@ namespace ctranslate2 {
         }
       };
 
-      BatchReader<SourceReader> batch_source_reader(source, source_reader);
-      std::unique_ptr<BatchReader<TargetReader>> batch_target_reader;
+      ParallelBatchReader batch_reader;
+      batch_reader.add(new StreamReader<SourceReader>(source, source_reader));
       if (target) {
-        batch_target_reader.reset(new BatchReader<TargetReader>(*target, target_reader));
+        batch_reader.add(new StreamReader<TargetReader>(*target, target_reader));
       }
 
-      while (batch_source_reader.has_next()) {
-        auto batch_source_tokens = batch_source_reader.get_next(read_batch_size,
-                                                                options.batch_type);
-
-        if (batch_target_reader) {
-          auto batch_target_tokens = batch_target_reader->get_next(batch_source_tokens.size());
-          if (batch_target_tokens.size() != batch_source_tokens.size())
-            throw std::runtime_error("Source and target streams do not have "
-                                     "the same number of elements");
-          results.emplace(post(std::move(batch_source_tokens),
-                               std::move(batch_target_tokens),
-                               options,
-                               /*blocking=*/true));
-        } else {
-          results.emplace(post(std::move(batch_source_tokens),
-                               options,
-                               /*blocking=*/true));
-        }
+      while (true) {
+        auto batch = batch_reader.get_next(read_batch_size, options.batch_type);
+        if (batch[0].empty())
+          break;
+        results.emplace(post(std::move(batch[0]),
+                             target
+                             ? std::move(batch[1])
+                             : std::vector<std::vector<std::string>>(),
+                             options,
+                             /*blocking=*/true));
 
         pop_results(/*blocking=*/false);
       }

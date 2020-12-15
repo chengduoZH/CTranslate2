@@ -2,7 +2,7 @@
 
 #include "ctranslate2/layers/decoder.h"
 #include "ctranslate2/sampling.h"
-#include "ctranslate2/translation_result.h"
+#include "ctranslate2/generation_result.h"
 
 namespace ctranslate2 {
 
@@ -70,12 +70,6 @@ namespace ctranslate2 {
            const size_t num_hypotheses = 1,
            const std::vector<std::vector<size_t>>* prefix_ids = nullptr) const override;
   };
-
-  void initialize_decoder_with_prefix(layers::Decoder& decoder,
-                                      layers::DecoderState& state,
-                                      const std::vector<size_t>& start_ids,
-                                      const std::vector<size_t>& prefix_ids,
-                                      std::vector<std::vector<float>>* prefix_attention);
 
   std::vector<GenerationResult<size_t>>
   decode(layers::Decoder& decoder,

@@ -59,19 +59,34 @@ namespace ctranslate2 {
           << ", AVX=" << cpu::cpu_supports_avx()
           << ", AVX2=" << cpu::cpu_supports_avx()
           << ")" << std::endl;
-    LOG() << "Selected CPU ISA: " << cpu::isa_to_str(cpu::get_cpu_isa()) << std::endl;
-    LOG() << "Use Intel MKL: " << cpu::mayiuse_mkl() << std::endl;
-    LOG() << "SGEMM CPU backend: "
+    LOG() << " - Selected ISA: " << cpu::isa_to_str(cpu::get_cpu_isa()) << std::endl;
+    LOG() << " - Use Intel MKL: " << cpu::mayiuse_mkl() << std::endl;
+    LOG() << " - SGEMM backend: "
           << cpu::gemm_backend_to_str(cpu::get_gemm_backend(ComputeType::FLOAT))
           << std::endl;
-    LOG() << "GEMM_S16 CPU backend: "
+    LOG() << " - GEMM_S16 backend: "
           << cpu::gemm_backend_to_str(cpu::get_gemm_backend(ComputeType::INT16))
           << std::endl;
-    LOG() << "GEMM_S8 CPU backend: "
+    LOG() << " - GEMM_S8 backend: "
           << cpu::gemm_backend_to_str(cpu::get_gemm_backend(ComputeType::INT8))
           << " (u8s8 preferred: " << cpu::prefer_u8s8s32_gemm() << ")"
           << std::endl;
-    LOG() << "Use packed GEMM: " << cpu::should_pack_gemm_weights() << std::endl;
+    LOG() << " - Use packed GEMM: " << cpu::should_pack_gemm_weights() << std::endl;
+
+#ifdef CT2_WITH_CUDA
+    for (int i = 0; i < cuda::get_gpu_count(); ++i) {
+      const cudaDeviceProp& device_prop = cuda::get_device_properties(i);
+      LOG() << "GPU #" << i << ": " << device_prop.name
+            << " (CC=" << device_prop.major << '.' << device_prop.minor << ')'
+            << std::endl;
+      LOG() << " - Allow INT8: " << mayiuse_int8(Device::CUDA, i)
+            << " (with Tensor Cores: " << cuda::gpu_has_int8_tensor_cores(i) << ')'
+            << std::endl;
+      LOG() << " - Allow FP16: " << mayiuse_float16(Device::CUDA, i)
+            << " (with Tensor Cores: " << cuda::gpu_has_fp16_tensor_cores(i) << ')'
+            << std::endl;
+    }
+#endif
   }
 
   // Maybe log run configuration on program start.
@@ -88,7 +103,7 @@ namespace ctranslate2 {
     case Device::CUDA: {
 #ifdef CT2_WITH_CUDA
       static const bool allow_float16 = read_bool_from_env("CT2_CUDA_ALLOW_FP16");
-      return allow_float16 || cuda::has_fast_float16(device_index);
+      return allow_float16 || cuda::gpu_has_fp16_tensor_cores(device_index);
 #else
       (void)device_index;
       return false;
@@ -112,7 +127,7 @@ namespace ctranslate2 {
     switch (device) {
     case Device::CUDA:
 #ifdef CT2_WITH_CUDA
-      return cuda::has_fast_int8(device_index);
+      return cuda::gpu_supports_int8(device_index);
 #else
       (void)device_index;
       return false;
@@ -122,6 +137,20 @@ namespace ctranslate2 {
     default:
       return false;
     }
+  }
+
+  dim_t get_preferred_size_multiple(ComputeType compute_type, Device device, int device_index) {
+#ifdef CT2_WITH_CUDA
+    if (device == Device::CUDA) {
+      if (compute_type == ComputeType::FLOAT16 && cuda::gpu_has_fp16_tensor_cores(device_index))
+        return 8;
+    }
+#else
+    (void)compute_type;
+    (void)device;
+    (void)device_index;
+#endif
+    return 1;
   }
 
   void set_num_threads(size_t num_threads) {

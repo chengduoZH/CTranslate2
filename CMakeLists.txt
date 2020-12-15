@@ -10,7 +10,6 @@ project(ctranslate2)
 option(WITH_MKL "Compile with Intel MKL backend" ON)
 option(WITH_DNNL "Compile with DNNL backend" OFF)
 option(WITH_CUDA "Compile with CUDA backend" OFF)
-option(WITH_TENSORRT "Compile with TensorRT (required for TopK with k > 1)" ON)
 option(ENABLE_CPU_DISPATCH "Compile CPU kernels for multiple ISA and dispatch at runtime" ON)
 option(ENABLE_PROFILING "Compile with profiling support" OFF)
 option(LIB_ONLY "Do not compile clients" OFF)
@@ -24,11 +23,15 @@ endif()
 
 if(DEFINED ENV{INTELROOT})
   set(INTEL_ROOT_DEFAULT $ENV{INTELROOT})
+elseif(DEFINED ENV{ONEAPI_ROOT})
+  set(INTEL_ROOT_DEFAULT $ENV{ONEAPI_ROOT}/..)
 elseif(DEFINED ENV{MKLROOT})
   set(INTEL_ROOT_DEFAULT $ENV{MKLROOT}/..)
 elseif(WIN32)
   set(ProgramFilesx86 "ProgramFiles(x86)")
-  set(INTEL_ROOT_DEFAULT $ENV{${ProgramFilesx86}}/IntelSWTools/compilers_and_libraries/windows)
+  set(INTEL_ROOT_DEFAULT PATHS
+      $ENV{${ProgramFilesx86}}/IntelSWTools/compilers_and_libraries/windows
+      $ENV{${ProgramFilesx86}}/Intel)
 else()
   set(INTEL_ROOT_DEFAULT "/opt/intel")
 endif()
@@ -67,20 +70,21 @@ set(PRIVATE_INCLUDE_DIRECTORIES
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   )
 set(SOURCES
-  src/decoding.cc
-  src/devices.cc
+  src/batch_reader.cc
   src/cpu/backend.cc
   src/cpu/cpu_info.cc
   src/cpu/cpu_isa.cc
   src/cpu/kernels.cc
+  src/decoding.cc
+  src/devices.cc
+  src/generation_result.cc
   src/layers/attention.cc
-  src/layers/decoder.cc
   src/layers/common.cc
+  src/layers/decoder.cc
   src/models/model.cc
   src/models/sequence_to_sequence.cc
   src/models/transformer.cc
   src/ops/add.cc
-  src/ops/min_max.cc
   src/ops/concat.cc
   src/ops/concat_split_cpu.cc
   src/ops/dequantize.cc
@@ -93,9 +97,12 @@ set(SOURCES
   src/ops/layer_norm_cpu.cc
   src/ops/log.cc
   src/ops/matmul.cc
+  src/ops/min_max.cc
   src/ops/mul.cc
   src/ops/multinomial.cc
   src/ops/multinomial_cpu.cc
+  src/ops/quantize.cc
+  src/ops/quantize_cpu.cc
   src/ops/relu.cc
   src/ops/softmax.cc
   src/ops/softmax_cpu.cc
@@ -105,14 +112,11 @@ set(SOURCES
   src/ops/topk.cc
   src/ops/topk_cpu.cc
   src/ops/transpose.cc
-  src/ops/quantize.cc
-  src/ops/quantize_cpu.cc
-  src/primitives/cpu.cc
   src/padder.cc
+  src/primitives/cpu.cc
   src/profiler.cc
   src/sampling.cc
   src/storage_view.cc
-  src/translation_result.cc
   src/translator.cc
   src/translator_pool.cc
   src/types.cc
@@ -158,8 +162,14 @@ if(NOT OPENMP_RUNTIME STREQUAL "NONE")
 
   if(OPENMP_RUNTIME STREQUAL "INTEL")
     # Find Intel libraries.
-    find_library(IOMP5_LIBRARY iomp5 libiomp5md HINTS
-      ${INTEL_ROOT}/lib ${INTEL_ROOT}/lib/intel64 ${INTEL_ROOT}/compiler/lib/intel64)
+    find_library(IOMP5_LIBRARY iomp5 libiomp5md PATHS
+      ${INTEL_ROOT}/lib
+      ${INTEL_ROOT}/lib/intel64
+      ${INTEL_ROOT}/compiler/lib/intel64
+      ${INTEL_ROOT}/oneAPI/compiler/latest/windows/compiler/lib/intel64_win
+      ${INTEL_ROOT}/oneapi/compiler/latest/linux/compiler/lib/intel64_lin
+      ${INTEL_ROOT}/oneapi/compiler/latest/mac/compiler/lib
+      )
     if(IOMP5_LIBRARY)
       list(APPEND LIBRARIES ${IOMP5_LIBRARY})
       message(STATUS "Using OpenMP: ${IOMP5_LIBRARY}")
@@ -179,8 +189,12 @@ if(NOT OPENMP_RUNTIME STREQUAL "NONE")
 endif()
 
 if(WITH_MKL)
-  find_path(MKL_ROOT include/mkl.h PATHS $ENV{MKLROOT} ${INTEL_ROOT}/mkl
-                                   DOC "Path to MKL root directory")
+  find_path(MKL_ROOT include/mkl.h DOC "Path to MKL root directory" PATHS
+    $ENV{MKLROOT}
+    ${INTEL_ROOT}/mkl
+    ${INTEL_ROOT}/oneAPI/mkl/latest
+    ${INTEL_ROOT}/oneapi/mkl/latest
+    )
 
   # Find MKL includes.
   find_path(MKL_INCLUDE_DIR NAMES mkl.h HINTS ${MKL_ROOT}/include/)
@@ -241,14 +255,21 @@ if(WITH_MKL)
 endif()
 
 if(WITH_DNNL)
-  find_path(DNNL_INCLUDE_DIR NAMES dnnl.h)
+  set(ONEAPI_DNNL_PATH ${INTEL_ROOT}/oneapi/dnnl/latest)
+  if(OPENMP_RUNTIME STREQUAL "INTEL")
+    set(ONEAPI_DNNL_PATH ${ONEAPI_DNNL_PATH}/cpu_iomp)
+  else()
+    set(ONEAPI_DNNL_PATH ${ONEAPI_DNNL_PATH}/cpu_gomp)
+  endif()
+
+  find_path(DNNL_INCLUDE_DIR NAMES dnnl.h PATHS ${ONEAPI_DNNL_PATH}/include)
   if(DNNL_INCLUDE_DIR)
     message(STATUS "Found DNNL include directory: ${DNNL_INCLUDE_DIR}")
   else()
     message(FATAL_ERROR "DNNL include directory not found")
   endif()
 
-  find_library(DNNL_LIBRARY NAMES dnnl)
+  find_library(DNNL_LIBRARY NAMES dnnl PATHS ${ONEAPI_DNNL_PATH}/lib)
   if(DNNL_LIBRARY)
     message(STATUS "Found DNNL library: ${DNNL_LIBRARY}")
   else()
@@ -282,31 +303,6 @@ if (WITH_CUDA)
 
   cuda_select_nvcc_arch_flags(ARCH_FLAGS ${CUDA_ARCH_LIST})
   list(APPEND CUDA_NVCC_FLAGS ${ARCH_FLAGS})
-
-  if(WITH_TENSORRT)
-    find_library(TENSORRT_LIBRARY NAMES nvinfer)
-    find_path(TENSORRT_INCLUDE_DIR NAMES NvInfer.h)
-    if(NOT TENSORRT_LIBRARY OR NOT TENSORRT_INCLUDE_DIR)
-      message(FATAL_ERROR "TensorRT not found")
-    else()
-      message(STATUS "Found TensorRT library: ${TENSORRT_LIBRARY}")
-      message(STATUS "Found TensorRT include directory: ${TENSORRT_INCLUDE_DIR}")
-    endif()
-
-    if(NOT MSVC)
-      # TensorRT 6 header generates a lot of deprecating warnings. Ignore them.
-      set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -Wno-deprecated-declarations")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations")
-    endif()
-
-    add_definitions(-DCT2_WITH_TENSORRT)
-    list(APPEND PRIVATE_INCLUDE_DIRECTORIES
-      ${TENSORRT_INCLUDE_DIR}
-      )
-    list(APPEND LIBRARIES
-      ${TENSORRT_LIBRARY}
-      )
-  endif()
 
   message(STATUS "NVCC compilation flags: ${CUDA_NVCC_FLAGS}")
 

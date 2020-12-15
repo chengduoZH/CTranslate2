@@ -3,15 +3,16 @@
 #include <string>
 #include <vector>
 
+#include "batch_reader.h"
 #include "models/sequence_to_sequence.h"
-#include "translation_result.h"
+#include "generation_result.h"
 
 namespace ctranslate2 {
 
-  enum class BatchType {
-    Examples,
-    Tokens,
-  };
+  using TranslationResult = GenerationResult<std::string>;
+
+  class Translator;
+  class TranslatorPool;
 
   struct TranslationOptions {
     // Maximum batch size to run the model on (set 0 to forward the input as is).
@@ -56,6 +57,16 @@ namespace ctranslate2 {
     // used with a target prefix to provide alternatives at a specifc location in the
     // translation.
     bool return_alternatives = false;
+
+    void validate() const;
+
+  private:
+    // Internal options.
+    bool validated = false;
+    bool rebatch_input = true;
+
+    friend class Translator;
+    friend class TranslatorPool;
   };
 
   // This class holds all information required to translate from a model. Copying
@@ -97,7 +108,6 @@ namespace ctranslate2 {
     // Change the model while keeping the same device and compute type as the previous model.
     void set_model(const std::string& model_dir);
     void set_model(models::ModelReader& model_reader);
-
     void set_model(const std::shared_ptr<const models::Model>& model);
 
     // Detach the model from this translator, which becomes unusable until set_model is called.
@@ -107,45 +117,32 @@ namespace ctranslate2 {
     void assert_has_model() const;
 
     std::vector<TranslationResult>
-    run_batch_translation_sorted(const std::vector<std::vector<std::string>>& source,
-                                 const std::vector<std::vector<std::string>>* target_prefix,
-                                 const TranslationOptions& options);
-    std::vector<TranslationResult>
     run_batch_translation(const std::vector<std::vector<std::string>>& source,
-                          const std::vector<std::vector<std::string>>* target_prefix,
+                          const std::vector<std::vector<std::string>>& target_prefix,
                           const TranslationOptions& options);
-    TranslationResult
-    run_translation(const std::vector<std::string>& source,
-                    const std::vector<std::string>* target_prefix,
-                    const TranslationOptions& options);
 
     std::shared_ptr<const models::Model> _model;
     std::unique_ptr<layers::Encoder> _encoder;
     std::unique_ptr<layers::Decoder> _decoder;
-    const VocabularyMap* _vocabulary_map;
-    const Vocabulary* _source_vocabulary;
-    const Vocabulary* _target_vocabulary;
+    const models::SequenceToSequenceModel* _seq2seq_model = nullptr;
   };
 
+  struct Batch {
+    std::vector<std::vector<std::string>> source;
+    std::vector<std::vector<std::string>> target;
+    std::vector<size_t> example_index;  // Index of each example in the original input.
+  };
 
-  BatchType str_to_batch_type(const std::string& batch_type);
-
-  template <typename T>
-  size_t get_batch_size_increment(const std::vector<T>& example, const BatchType batch_type) {
-    switch (batch_type) {
-    case BatchType::Tokens:
-      return example.size();
-    default:
-      return 1;
-    };
-  }
-
-  template <typename T>
-  size_t get_batch_size(const std::vector<std::vector<T>>& examples, const BatchType batch_type) {
-    size_t batch_size = 0;
-    for (const std::vector<T>& example : examples)
-      batch_size += get_batch_size_increment(example, batch_type);
-    return batch_size;
-  }
+  // Rebatch the input according to the translation options.
+  // This function can also reorder the examples to improve efficiency.
+  std::vector<Batch>
+  rebatch_input(const std::vector<std::vector<std::string>>& source,
+                const std::vector<std::vector<std::string>>& target,
+                size_t max_batch_size,
+                BatchType batch_type = BatchType::Examples);
+  std::vector<Batch>
+  rebatch_input(const std::vector<std::vector<std::string>>& source,
+                const std::vector<std::vector<std::string>>& target_prefix,
+                const TranslationOptions& options);
 
 }

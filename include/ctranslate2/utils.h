@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "devices.h"
+#include "types.h"
 
 namespace ctranslate2 {
 
@@ -20,6 +21,9 @@ namespace ctranslate2 {
   bool mayiuse_float16(Device device, int device_index = 0);
   bool mayiuse_int16(Device device, int device_index = 0);
   bool mayiuse_int8(Device device, int device_index = 0);
+  dim_t get_preferred_size_multiple(ComputeType compute_type,
+                                    Device device,
+                                    int device_index = 0);
 
   void set_num_threads(size_t num_threads);
 
@@ -33,8 +37,12 @@ namespace ctranslate2 {
   void* aligned_alloc(size_t size, size_t alignment);
   void aligned_free(void* ptr);
 
-#define THROW_EXCEPTION(EXCEPTION, MESSAGE)                             \
+#ifdef NDEBUG
+#  define THROW_EXCEPTION(EXCEPTION, MESSAGE) throw EXCEPTION(MESSAGE)
+#else
+#  define THROW_EXCEPTION(EXCEPTION, MESSAGE)                           \
   throw EXCEPTION(std::string(__FILE__) + ":" + std::to_string(__LINE__) + ": " + MESSAGE)
+#endif
 #define THROW_RUNTIME_ERROR(MESSAGE) THROW_EXCEPTION(std::runtime_error, MESSAGE)
 #define THROW_INVALID_ARGUMENT(MESSAGE) THROW_EXCEPTION(std::invalid_argument, MESSAGE)
 

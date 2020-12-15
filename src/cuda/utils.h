@@ -1,14 +1,9 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
-
-#ifdef CT2_WITH_TENSORRT
-#  include <NvInfer.h>
-#endif
 
 #include "ctranslate2/types.h"
 #include "ctranslate2/utils.h"
@@ -56,8 +51,10 @@ namespace ctranslate2 {
 
     int get_gpu_count();
     bool has_gpu();
-    bool has_fast_int8(int device = -1);
-    bool has_fast_float16(int device = -1);
+    const cudaDeviceProp& get_device_properties(int device = -1);
+    bool gpu_supports_int8(int device = -1);
+    bool gpu_has_int8_tensor_cores(int device = -1);
+    bool gpu_has_fp16_tensor_cores(int device = -1);
 
     // Custom allocator for Thrust.
     class ThrustAllocator {
@@ -68,40 +65,6 @@ namespace ctranslate2 {
     };
 
     ThrustAllocator& get_thrust_allocator();
-
-#ifdef CT2_WITH_TENSORRT
-    class TensorRTLayer {
-    public:
-      virtual ~TensorRTLayer();
-
-    protected:
-      void run(void** bindings, const std::vector<nvinfer1::Dims>& input_dims);
-
-      // These methods are called on the first call to run().
-      virtual void build_network(nvinfer1::INetworkDefinition* network) = 0;
-      virtual void set_builder_config(nvinfer1::IBuilderConfig*) {};
-      virtual void set_optimization_profile(nvinfer1::IOptimizationProfile* profile) = 0;
-
-    private:
-      void build();
-      int _device = 0;
-      nvinfer1::ICudaEngine* _engine = nullptr;
-      nvinfer1::IExecutionContext* _execution_context = nullptr;
-    };
-
-    template <typename T>
-    struct TensorRTType;
-
-    template<>
-    struct TensorRTType<float> {
-      static constexpr nvinfer1::DataType type = nvinfer1::DataType::kFLOAT;
-    };
-
-    template<>
-    struct TensorRTType<float16_t> {
-      static constexpr nvinfer1::DataType type = nvinfer1::DataType::kHALF;
-    };
-#endif
 
   }
 }

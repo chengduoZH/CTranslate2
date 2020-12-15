@@ -4,6 +4,59 @@
 
 ### Fixes and improvements
 
+## [v1.16.2](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.16.2) (2020-11-27)
+
+### Fixes and improvements
+
+* Fix cuBLAS version included in the Python wheels published to PyPI. The included library was targetting CUDA 10.2 instead of CUDA 10.1.
+* Re-add Python 3.5 wheels on PyPI to give users more time to transition
+
+## [v1.16.1](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.16.1) (2020-11-23)
+
+### Fixes and improvements
+
+* Fuse dequantization and bias addition on GPU for improved INT8 performance
+* Improve performance of masked softmax on GPU
+* Fix error when building the CentOS 7 GPU Docker image
+* The previous version listed "Pad size of INT8 matrices to a multiple of 16 when the GPU has INT8 Tensor Cores". However, the padding was not applied due to a bug and fixing it degraded the performance, so this behavior is not implemented for now.
+
+## [v1.16.0](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.16.0) (2020-11-18)
+
+### Changes
+
+* Drop support for Python 2.7 and 3.5
+
+### New features
+
+* Add Docker images using CUDA 11.0
+
+### Fixes and improvements
+
+* Enable parallel CPU translations from `translate_batch` in Python when setting `inter_threads` > 1 and `max_batch_size` > 0
+* Improve GPU performance on Turing architecture when using a Docker image or the Python package
+* Pad size of INT8 matrices to a multiple of 16 when the GPU has INT8 Tensor Cores
+* Add information about detected GPU devices in `CT2_VERBOSE` output
+* Update oneDNN to 1.7
+* [Python] Improve type checking for some arguments
+
+## [v1.15.0](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.15.0) (2020-11-06)
+
+### New features
+
+* [Experimental] The Python package published on PyPI now includes GPU support. The binary is compiled with CUDA 10.1, but all CUDA dependencies are integrated in the package and do not need to be installed on the system. The only requirement should be a working GPU with driver version >= 418.39.
+
+### Fixes and improvements
+
+* Remove the TensorRT dependency to simplify installation and reduce memory usage:
+  * Reduce GPU Docker images size by 600MB
+  * Reduce memory usage on the GPU and the system by up 1GB
+  * Reduce initialization time during the first GPU translation
+* Improve TopK performance on GPU for K < 5
+* Improve INT8 performance on GPU
+* Accept linear layers without bias when converting models
+* Update Intel MKL to 2020.4
+* [Python] Improve compatibility with Python 3.9
+
 ## [v1.14.0](https://github.com/OpenNMT/CTranslate2/releases/tag/v1.14.0) (2020-10-13)
 
 ### New features

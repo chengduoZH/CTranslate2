@@ -14,14 +14,15 @@ RUN apt-get update && \
 
 WORKDIR /root
 
-RUN wget https://cmake.org/files/v3.12/cmake-3.12.2-Linux-x86_64.tar.gz
-RUN tar xf cmake-3.12.2-Linux-x86_64.tar.gz && \
-    rm cmake-3.12.2-Linux-x86_64.tar.gz
-ENV PATH=$PATH:/root/cmake-3.12.2-Linux-x86_64/bin
+ENV CMAKE_VERSION=3.18.4
+RUN wget -q https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-Linux-x86_64.tar.gz && \
+    tar xf *.tar.gz && \
+    rm *.tar.gz
+ENV PATH=$PATH:/root/cmake-$CMAKE_VERSION-Linux-x86_64/bin
 
 ENV MKL_VERSION=2020
-ENV MKL_UPDATE=3
-ENV MKL_BUILD=111
+ENV MKL_UPDATE=4
+ENV MKL_BUILD=912
 RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB && \
     apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-*.PUB && \
     rm GPG-PUB-KEY-INTEL-SW-PRODUCTS-*.PUB && \
@@ -32,8 +33,8 @@ RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCT
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-ENV DNNL_VERSION=1.5.0
-ENV DNNL_TAG=v1.5
+ENV DNNL_VERSION=1.7.0
+ENV DNNL_TAG=v1.7
 ENV DNNL_DIR=/root/dnnl
 RUN wget https://github.com/oneapi-src/oneDNN/releases/download/${DNNL_TAG}/dnnl_lnx_${DNNL_VERSION}_cpu_gomp.tgz && \
     tar xf dnnl*.tgz && \
@@ -66,12 +67,12 @@ COPY python python
 
 WORKDIR /root/ctranslate2-dev/python
 RUN wget -nv https://bootstrap.pypa.io/get-pip.py && \
-    python3 get-pip.py --no-setuptools && \
-    python3 -m pip --no-cache-dir install pybind11==2.4.3 setuptools==49.* && \
+    python3 get-pip.py && \
+    python3 -m pip --no-cache-dir install -r install_requirements.txt && \
     python3 setup.py bdist_wheel && \
     rm -r build && \
     rm get-pip.py && \
-    python3 -m pip freeze | grep pybind11 > /root/ctranslate2/install_requirements.txt && \
+    cp install_requirements.txt /root/ctranslate2/ && \
     python3 setup.py sdist && \
     mv dist/* /root/ctranslate2 && \
     rmdir dist
