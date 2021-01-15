@@ -9,6 +9,8 @@ project(ctranslate2)
 
 option(WITH_MKL "Compile with Intel MKL backend" ON)
 option(WITH_DNNL "Compile with DNNL backend" OFF)
+option(WITH_ACCELERATE "Compile with Accelerate backend" OFF)
+option(WITH_OPENBLAS "Compile with OpenBLAS backend" OFF)
 option(WITH_CUDA "Compile with CUDA backend" OFF)
 option(ENABLE_CPU_DISPATCH "Compile CPU kernels for multiple ISA and dispatch at runtime" ON)
 option(ENABLE_PROFILING "Compile with profiling support" OFF)
@@ -140,15 +142,27 @@ macro(ct2_compile_kernels_for_isa isa flag)
   list(APPEND SOURCES ${CMAKE_CURRENT_BINARY_DIR}/kernels_${isa}.cc)
 endmacro()
 
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(amd64)|(AMD64)")
+  add_definitions(-DCT2_X86_BUILD)
+  set(CT2_BUILD_ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(arm64)|(aarch64)")
+  add_definitions(-DCT2_ARM64_BUILD)
+  set(CT2_BUILD_ARCH "arm64")
+endif()
+
 if(ENABLE_CPU_DISPATCH)
   message(STATUS "Compiling for multiple CPU ISA and enabling runtime dispatch")
   add_definitions(-DCT2_WITH_CPU_DISPATCH)
-  if(WIN32)
-    ct2_compile_kernels_for_isa(avx "/arch:AVX")
-    ct2_compile_kernels_for_isa(avx2 "/arch:AVX2")
-  else()
-    ct2_compile_kernels_for_isa(avx "-mavx")
-    ct2_compile_kernels_for_isa(avx2 "-mavx2")
+  if(CT2_BUILD_ARCH STREQUAL "x86_64")
+    if(WIN32)
+      ct2_compile_kernels_for_isa(avx "/arch:AVX")
+      ct2_compile_kernels_for_isa(avx2 "/arch:AVX2")
+    else()
+      ct2_compile_kernels_for_isa(avx "-mavx")
+      ct2_compile_kernels_for_isa(avx2 "-mavx2")
+    endif()
+  elseif(CT2_BUILD_ARCH STREQUAL "arm64")
+    ct2_compile_kernels_for_isa(neon "-DUSE_NEON")
   endif()
 endif()
 
@@ -281,6 +295,20 @@ if(WITH_DNNL)
   list(APPEND LIBRARIES ${DNNL_LIBRARY})
 endif()
 
+if (WITH_ACCELERATE)
+  set(BLA_VENDOR Apple)
+  find_package(BLAS REQUIRED)
+  add_definitions(-DCT2_WITH_ACCELERATE)
+  list(APPEND LIBRARIES ${BLAS_LIBRARIES})
+endif()
+
+if (WITH_OPENBLAS)
+  set(BLA_VENDOR OpenBLAS)
+  find_package(BLAS REQUIRED)
+  add_definitions(-DCT2_WITH_OPENBLAS)
+  list(APPEND LIBRARIES ${BLAS_LIBRARIES})
+endif()
+
 if (WITH_CUDA)
   find_package(CUDA 10.0 REQUIRED)
   add_definitions(-DCT2_WITH_CUDA)
@@ -322,10 +350,12 @@ if (WITH_CUDA)
     message(STATUS "Found Thrust include directory: ${THRUST_INCLUDE_DIR}")
   endif()
 
-  cuda_include_directories(
+  set(CUDA_INCLUDE_DIRECTORIES
     ${CUB_INCLUDE_DIR}
     ${THRUST_INCLUDE_DIR}
     )
+
+  cuda_include_directories(${CUDA_INCLUDE_DIRECTORIES})
   cuda_add_library(${PROJECT_NAME}
     ${SOURCES}
     src/cuda/utils.cc
@@ -334,10 +364,12 @@ if (WITH_CUDA)
     src/ops/dequantize_gpu.cu
     src/ops/gather_gpu.cu
     src/ops/layer_norm_gpu.cu
+    src/ops/multinomial_gpu.cu
     src/ops/softmax_gpu.cu
     src/ops/topk_gpu.cu
     src/ops/quantize_gpu.cu
     )
+  list(APPEND PRIVATE_INCLUDE_DIRECTORIES ${CUDA_INCLUDE_DIRECTORIES})
   list(APPEND LIBRARIES
     ${CUDA_CUBLAS_LIBRARIES}
     )
@@ -346,7 +378,7 @@ else()
 endif()
 
 target_link_libraries(${PROJECT_NAME} ${LIBRARIES})
-target_include_directories(${PROJECT_NAME}
+target_include_directories(${PROJECT_NAME} BEFORE
   PUBLIC ${PUBLIC_INCLUDE_DIRECTORIES}
   PRIVATE ${PRIVATE_INCLUDE_DIRECTORIES}
   )

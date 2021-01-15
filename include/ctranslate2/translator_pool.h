@@ -12,9 +12,6 @@
 
 namespace ctranslate2 {
 
-  using TranslationInput = std::vector<std::vector<std::string>>;
-  using TranslationOutput = std::vector<TranslationResult>;
-
   struct TranslationStats {
     size_t num_tokens = 0;
     size_t num_examples = 0;
@@ -41,22 +38,25 @@ namespace ctranslate2 {
     ~TranslatorPool();
 
     // Run a translation job asynchronously.
-    // With blocking=true it will block if there is already too much work pending.
-    std::future<TranslationOutput> post(TranslationInput source,
-                                        TranslationOptions options,
-                                        bool blocking=false);
-    std::future<TranslationOutput> post(TranslationInput source,
-                                        TranslationInput target_prefix,
-                                        TranslationOptions options,
-                                        bool blocking=false);
+    std::future<std::vector<TranslationResult>>
+    translate_batch_async(std::vector<std::vector<std::string>> source,
+                          TranslationOptions options);
+    std::future<std::vector<TranslationResult>>
+    translate_batch_async(std::vector<std::vector<std::string>> source,
+                          std::vector<std::vector<std::string>> target_prefix,
+                          TranslationOptions options);
 
     // Run a translation synchronously.
     // To benefit from parallelism, you can set max_batch_size in the translation options:
     // the input will be split according to this value and each batch will be translated
     // in parallel.
-    TranslationOutput translate_batch(const TranslationInput& source,
-                                      const TranslationInput& target_prefix,
-                                      TranslationOptions options);
+    std::vector<TranslationResult>
+    translate_batch(const std::vector<std::vector<std::string>>& source,
+                    const TranslationOptions& options);
+    std::vector<TranslationResult>
+    translate_batch(const std::vector<std::vector<std::string>>& source,
+                    const std::vector<std::vector<std::string>>& target_prefix,
+                    const TranslationOptions& options);
 
     // Translate a stream in parallel.
     // Results will be written in order as they are available so the stream content is
@@ -81,7 +81,7 @@ namespace ctranslate2 {
                         SourceReader& source_reader,
                         TargetReader& target_reader,
                         TargetWriter& target_writer) {
-      std::queue<std::future<TranslationOutput>> results;
+      std::queue<std::future<std::vector<TranslationResult>>> results;
 
       auto pop_results = [&results, &output, &target_writer](bool blocking) {
         static const auto zero_sec = std::chrono::seconds(0);
@@ -109,7 +109,7 @@ namespace ctranslate2 {
                              ? std::move(batch[1])
                              : std::vector<std::vector<std::string>>(),
                              options,
-                             /*blocking=*/true));
+                             /*throttle=*/true));
 
         pop_results(/*blocking=*/false);
       }
@@ -264,30 +264,70 @@ namespace ctranslate2 {
     size_t num_translators() const;
     const std::vector<Translator>& get_translators() const;
 
+    // With throttle=true it will block if there is already too much work pending.
+    std::future<std::vector<TranslationResult>>
+    post(std::vector<std::vector<std::string>> source,
+         TranslationOptions options,
+         bool throttle = false);
+    std::future<std::vector<TranslationResult>>
+    post(std::vector<std::vector<std::string>> source,
+         std::vector<std::vector<std::string>> target_prefix,
+         TranslationOptions options,
+         bool throttle = false);
+
   private:
-    struct TranslationJob {
-      TranslationJob(TranslationInput source_,
-                     TranslationInput target_prefix_,
-                     TranslationOptions options_)
-        : source(source_)
-        , target_prefix(target_prefix_)
-        , options(options_) {
+    class Job {
+    public:
+      virtual ~Job() = default;
+      virtual void run(Translator& translator) = 0;
+    };
+
+    template <typename ResultType>
+    class BaseJob : public Job {
+    public:
+      std::future<ResultType> get_future() {
+        return _promise.get_future();
       }
-      const TranslationInput source;
-      const TranslationInput target_prefix;
-      const TranslationOptions options;
+
+      void run(Translator& translator) override;
+
+    protected:
+      virtual ResultType compute(Translator& translator) const = 0;
+
+    private:
+      std::promise<ResultType> _promise;
+    };
+
+    class TranslationJob : public BaseJob<std::vector<TranslationResult>> {
+    public:
+      TranslationJob(std::vector<std::vector<std::string>> source,
+                     std::vector<std::vector<std::string>> target_prefix,
+                     TranslationOptions options)
+        : _source(std::move(source))
+        , _target_prefix(std::move(target_prefix))
+        , _options(std::move(options)) {
+      }
+
+    protected:
+      std::vector<TranslationResult> compute(Translator& translator) const override;
+
+    private:
+      std::vector<std::vector<std::string>> _source;
+      std::vector<std::vector<std::string>> _target_prefix;
+      TranslationOptions _options;
     };
 
     void create_translators(const std::shared_ptr<const models::Model>& model,
                             size_t num_translators,
                             size_t num_threads_per_translator);
+    void post_job(std::unique_ptr<Job> job, bool throttle = false);
     void work_loop(Translator& translator, size_t num_threads);
 
     void open_input_file(const std::string& file, std::ifstream& stream) const;
     void open_output_file(const std::string& file, std::ofstream& stream) const;
 
     std::condition_variable _can_add_more_work;
-    std::queue<std::pair<const TranslationJob, std::promise<TranslationOutput>>> _work;
+    std::queue<std::unique_ptr<Job>> _work;
     std::vector<std::thread> _workers;
     std::vector<Translator> _translators;
     std::mutex _mutex;

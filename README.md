@@ -4,7 +4,7 @@
 
 CTranslate2 is a fast inference engine for [OpenNMT-py](https://github.com/OpenNMT/OpenNMT-py) and [OpenNMT-tf](https://github.com/OpenNMT/OpenNMT-tf) models supporting both CPU and GPU execution. The goal is to provide comprehensive inference features and be the most efficient and cost-effective solution to deploy standard neural machine translation systems such as Transformer models.
 
-The project is production-oriented and comes with [backward compatibility guarantees](#what-is-the-state-of-this-project), but has also experimental features related to model compression and inference acceleration.
+The project is production-oriented and comes with [backward compatibility guarantees](#what-is-the-state-of-this-project), but it also includes experimental features related to model compression and inference acceleration.
 
 **Table of contents**
 
@@ -21,12 +21,13 @@ The project is production-oriented and comes with [backward compatibility guaran
 
 ## Key features
 
-* **Fast and efficient execution**<br/>The execution [is significantly faster and requires less resources](#benchmarks) than general-purpose deep learning frameworks on supported models and tasks.
+* **Fast and efficient execution on CPU and GPU**<br/>The execution [is significantly faster and requires less resources](#benchmarks) than general-purpose deep learning frameworks on supported models and tasks.
 * **Quantization and reduced precision**<br/>The model serialization and computation support weights with reduced precision: 16-bit floating points (FP16), 16-bit integers, and 8-bit integers.
+* **Multiple CPU architectures support**<br/>The project supports x86-64 and ARM64 processors and integrates multiple backends that are optimized for these platforms: [Intel MKL](https://software.intel.com/content/www/us/en/develop/tools/oneapi/components/onemkl.html), [oneDNN](https://github.com/oneapi-src/oneDNN), [OpenBLAS](https://www.openblas.net/), and [Apple Accelerate](https://developer.apple.com/documentation/accelerate).
+* **Automatic CPU detection and code dispatch**<br/>One binary can include multiple backends (e.g. Intel MKL and oneDNN) and instruction set architectures (e.g. AVX, AVX2) that are automatically selected at runtime based on the CPU information.
 * **Parallel translations**<br/>CPU translations can be run efficiently in parallel without duplicating the model data in memory.
 * **Dynamic memory usage**<br/>The memory usage changes dynamically depending on the request size while still meeting performance requirements thanks to caching allocators on both CPU and GPU.
-* **Automatic CPU detection and code dispatch**<br/>The fastest code path is selected at runtime based on the CPU (Intel or AMD) and the supported instruction set architectures (AVX, AVX2, or AVX512).
-* **Ligthweight on disk**<br/>Models can be quantized below 100MB with minimal accuracy loss. A full featured Docker image supporting GPU and CPU requires less than 400MB.
+* **Lightweight on disk**<br/>Models can be quantized below 100MB with minimal accuracy loss. A full featured Docker image supporting GPU and CPU requires less than 400MB.
 * **Simple integration**<br/>The project has few dependencies and exposes [translation APIs](#translating) in Python and C++ to cover most integration needs.
 * **Interactive decoding**<br/>[Advanced decoding features](docs/decoding.md) allow autocompleting a partial translation and returning alternatives at a specific location in the translation.
 
@@ -44,6 +45,7 @@ The translation API supports several decoding options:
 * returning multiple translation hypotheses
 * returning attention vectors
 * approximating the generation using a pre-compiled [vocabulary map](#how-can-i-generate-a-vocabulary-mapping-file)
+* replacing unknown target tokens by source tokens with the highest attention
 
 See the [Decoding](docs/decoding.md) documentation for examples.
 
@@ -96,19 +98,19 @@ ct2-opennmt-tf-converter --model_path averaged-ende-export500k-v2 --model_spec T
 
 ### Python package
 
-The [`ctranslate2`](https://pypi.org/project/ctranslate2/) Python package will get you started in converting and executing models:
+Python packages are published on [PyPI](https://pypi.org/project/ctranslate2/) for Linux and macOS:
 
 ```bash
 pip install ctranslate2
 ```
 
-The package published on PyPI supports CPU and GPU execution. All software dependencies are included in the package (including CUDA for GPU support). The only requirements are listed below.
+All software dependencies are included in the package, including CUDA libraries for GPU support on Linux. The macOS version only supports CPU execution.
 
 **Requirements:**
 
-* OS: Linux
+* OS: Linux, macOS
 * Python version: >= 3.5
-* pip version: >= 19.0
+* pip version: >= 19.3
 * GPU driver version: >= 418.39
 
 ### Docker images
@@ -164,21 +166,29 @@ The converters support reducing the weights precision to save on space and possi
 * `int16`
 * `float16`
 
-However, some execution settings are not (yet) optimized for all computation types. The following table documents the actual type used during the computation depending on the model type:
+When loading a quantized model, the library tries to use the same type for computation. If the current platform or backend do not support optimized execution for this computation type (e.g. `int16` is not optimized on GPU), then the library converts the model weights to another optimized type. The tables below document the fallback types:
 
-| Model type | GPU (NVIDIA) | CPU (Intel) | CPU (AMD) |
-| ---------- | ------------ | ----------- | --------- |
-| float16    | float16 (\*) | float       | float     |
-| int16      | float16 (\*) | int16       | int8      |
-| int8       | int8 (\*\*)  | int8        | int8      |
+**On CPU:**
 
-*(\*) for Compute Capability >= 7.0, (\*\*) for Compute Capability >= 7.0 or == 6.1.*
+| Model | int8 | int16 | float16 |
+| --- | --- | --- | --- |
+| Intel | int8 | int16 | float |
+| other | int8 | int8 | float |
 
-The computation type can also be configured later, when starting a translation instance. See the `compute_type` argument on translation clients.
+*(This table only applies for prebuilt binaries or when compiling with both Intel MKL and oneDNN backends.)*
+
+**On GPU:**
+
+| Compute Capability | int8 | int16 | float16 |
+| --- | --- | --- | --- |
+| >= 7.0 | int8 | float16 | float16 |
+| 6.1 | int8 | float | float |
+| <= 6.0 | float | float | float |
 
 **Notes:**
 
-* Integer quantization is only supported for GEMM-based layers and embeddings
+* The computation type can also be changed when creating a translation instance by setting the `--compute_type` argument.
+* Integer quantization is only applied for GEMM-based layers and embeddings.
 
 ### Adding converters
 
@@ -268,6 +278,8 @@ The project uses [CMake](https://cmake.org/) for compilation. The following opti
 | WITH_CUDA | **OFF**, ON | Compiles with the CUDA backend |
 | WITH_DNNL | **OFF**, ON | Compiles with the oneDNN backend (a.k.a. DNNL) |
 | WITH_MKL | OFF, **ON** | Compiles with the Intel MKL backend |
+| WITH_ACCELERATE | **OFF**, ON | Compiles with the Apple Accelerate backend |
+| WITH_OPENBLAS | **OFF**, ON | Compiles with the OpenBLAS backend |
 | WITH_TESTS | **OFF**, ON | Compiles the tests |
 
 Some build options require external dependencies:
@@ -276,6 +288,10 @@ Some build options require external dependencies:
   * [Intel MKL](https://software.intel.com/en-us/mkl) (>=2019.5)
 * `-DWITH_DNNL=ON` requires:
   * [oneDNN](https://github.com/oneapi-src/oneDNN) (>=1.5)
+* `-DWITH_ACCELERATE=ON` requires:
+  * [Accelerate](https://developer.apple.com/documentation/accelerate) (only available on macOS)
+* `-DWITH_OPENBLAS=ON` requires:
+  * [OpenBLAS](https://github.com/xianyi/OpenBLAS)
 * `-DWITH_CUDA=ON` requires:
   * [cuBLAS](https://developer.nvidia.com/cublas) (>=10.0)
 
@@ -288,12 +304,11 @@ Multiple backends can be enabled for a single build. When building with both Int
 Use the following instructions to install Intel MKL:
 
 ```bash
-wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
-apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
-sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
-sudo sh -c 'echo deb https://apt.repos.intel.com/mkl all main > /etc/apt/sources.list.d/intel-mkl.list'
+wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+sudo sh -c 'echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list'
 sudo apt-get update
-sudo apt-get install intel-mkl-64bit-2020.4-912
+sudo apt-get install intel-oneapi-mkl-devel
 ```
 
 See the [Intel MKL documentation](https://software.intel.com/content/www/us/en/develop/tools/math-kernel-library.html) for other installation methods.
@@ -318,10 +333,9 @@ make -j4
 These steps should produce the `cli/translate` binary. You can try it with the model converted in the [Quickstart](#quickstart) section:
 
 ```bash
-echo "▁H ello ▁world !" | ./cli/translate --model ende_ctranslate2/ --device auto
+$ echo "▁H ello ▁world !" | ./cli/translate --model ende_ctranslate2/ --device auto
+▁Hallo ▁Welt !
 ```
-
-The result `▁Hallo ▁Welt !` should be displayed.
 
 ## Testing
 
@@ -469,21 +483,17 @@ However, you should probably **not** use this project when:
 
 ### What hardware is supported?
 
-The supported hardware mostly depends on the external libraries used for acceleration.
-
 **CPU**
 
-We recommend using a recent Intel CPU and [Intel MKL](https://software.intel.com/en-us/mkl) for maximum performance.
+CTranslate2 supports x86-64 and ARM64 processors. It includes optimizations for AVX, AVX2, and NEON and supports multiple BLAS backends that should be selected based on the target platform (see [Building](#building)).
 
-However, Intel MKL is known to run poorly on AMD CPUs. To improve AMD support, we recommend enabling the [oneDNN](https://github.com/oneapi-src/oneDNN) backend that will be automatically selected at runtime. oneDNN is included in all pre-built binaries of CTranslate2.
-
-Optimized execution on ARM is a future work (contributions are welcome!).
+Prebuilt binaries are designed to run on any x86-64 processors supporting at least SSE 4.2. The binaries implement runtime dispatch to select the best backend and instruction set architecture (ISA) for the platform. In particular, they are compiled with both [Intel MKL](https://software.intel.com/en-us/mkl) and [oneDNN](https://github.com/oneapi-src/oneDNN) so that Intel MKL is only used on Intel processors where it performs best, whereas oneDNN is used on other x86-64 processors such as AMD.
 
 **GPU**
 
-CTranslate2 currently requires a NVIDIA GPU with a Compute Capability greater or equal to 3.0 (Kepler). FP16 execution requires a Compute Capability greater or equal to 7.0.
+CTranslate2 supports NVIDIA GPUs with a Compute Capability greater or equal to 3.0 (Kepler). FP16 execution requires a Compute Capability greater or equal to 7.0.
 
-The driver requirement depends on the CUDA version, see the [CUDA Compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/index.html) for more information.
+The driver requirement depends on the CUDA version. See the [CUDA Compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/index.html) for more information.
 
 ### What are the known limitations?
 
@@ -496,7 +506,6 @@ We are actively looking to ease this assumption by supporting ONNX as model part
 There are many ways to make this project better and even faster. See the open issues for an overview of current and planned features. Here are some things we would like to get to:
 
 * Support of running ONNX graphs
-* Optimizations for ARM CPUs
 
 ### What is the difference between `intra_threads` and `inter_threads`?
 

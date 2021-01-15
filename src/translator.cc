@@ -9,16 +9,6 @@
 
 namespace ctranslate2 {
 
-  template <typename T>
-  static std::vector<T> index_vector(const std::vector<T>& v,
-                                     const std::vector<size_t>& index) {
-    std::vector<T> new_v;
-    new_v.resize(index.size());
-    for (size_t i = 0; i < index.size(); ++i)
-      new_v[i] = v[index[i]];
-    return new_v;
-  }
-
   static std::unique_ptr<const Sampler> make_sampler(const TranslationOptions& options) {
     const Sampler* sampler = nullptr;
 
@@ -129,6 +119,22 @@ namespace ctranslate2 {
     return results;
   }
 
+  static void
+  replace_unknowns(const std::vector<std::string>& source,
+                   std::vector<std::string>& hypotheses,
+                   const std::vector<std::vector<float>>& attention) {
+    for (size_t t = 0; t < hypotheses.size(); ++t) {
+      if (hypotheses[t] == Vocabulary::unk_token) {
+        const std::vector<float>& attention_values = attention[t];
+        const size_t pos = std::distance(attention_values.begin(),
+                                         std::max_element(attention_values.begin(),
+                                                          attention_values.end()));
+
+        hypotheses[t] = source[pos];
+      }
+    }
+  }
+
   std::vector<TranslationResult>
   Translator::run_batch_translation(const std::vector<std::vector<std::string>>& source,
                                     const std::vector<std::vector<std::string>>& target_prefix,
@@ -139,7 +145,9 @@ namespace ctranslate2 {
 
     const auto& source_vocabulary = _seq2seq_model->get_source_vocabulary();
     const auto& target_vocabulary = _seq2seq_model->get_target_vocabulary();
-    const auto source_ids = source_vocabulary.to_ids(source);
+    const auto source_ids = source_vocabulary.to_ids(source,
+                                                     _seq2seq_model->with_source_bos(),
+                                                     _seq2seq_model->with_source_eos());
     const auto target_prefix_ids = target_vocabulary.to_ids(target_prefix);
 
     const Device device = _model->device();
@@ -203,27 +211,38 @@ namespace ctranslate2 {
       options.num_hypotheses,
       options.return_alternatives,
       options.return_scores,
-      options.return_attention);
+      options.return_attention || options.replace_unknowns);
 
     // Convert generated ids to tokens.
     std::vector<TranslationResult> final_results;
     final_results.reserve(results.size());
     for (size_t i = 0; i < batch_size; ++i) {
       GenerationResult<size_t>& result = results[i];
+      std::vector<std::vector<std::string>> hypotheses = target_vocabulary.to_tokens(result.hypotheses());
 
-      // Remove padding in attention vectors.
       if (result.has_attention()) {
-        const size_t source_length = source[i].size();
+        // Remove padding and special tokens in attention vectors.
+        const size_t offset = size_t(_seq2seq_model->with_source_bos());
+        const size_t length = source[i].size();
+
         auto all_attention = result.attention();
-        for (auto& attention : all_attention) {
+        for (size_t h = 0; h < all_attention.size(); ++h) {
+          auto& attention = all_attention[h];
+
           for (auto& vector : attention) {
-            vector.resize(source_length);
+            vector = std::vector<float>(vector.begin() + offset, vector.begin() + offset + length);
           }
+
+          replace_unknowns(source[i], hypotheses[h], attention);
         }
+
+        if (!options.return_attention)
+          all_attention.clear();
+
         result.set_attention(std::move(all_attention));
       }
 
-      final_results.emplace_back(target_vocabulary.to_tokens(result.hypotheses()),
+      final_results.emplace_back(hypotheses,
                                  result.scores(),
                                  result.attention());
     }

@@ -6,6 +6,9 @@
 #elif defined(__AVX__)
 #  define TARGET_ISA CpuIsa::AVX
 #  include "cpu/vec_avx.h"
+#elif (defined(__ARM_NEON) && !defined(CT2_WITH_CPU_DISPATCH)) || defined(USE_NEON)
+#  define TARGET_ISA CpuIsa::NEON
+#  include "cpu/vec_neon.h"
 #else
 #  define TARGET_ISA CpuIsa::GENERIC
 #  include "cpu/vec.h"
@@ -16,27 +19,20 @@
 namespace ctranslate2 {
   namespace cpu {
 
-    template <dim_t vec_width, typename Function>
-    static void vectorized_iter(dim_t size, const Function& func) {
-      const dim_t remaining = size % vec_width;
+    template <CpuIsa ISA, typename T, typename Function>
+    static void vectorized_unary_transform(const T* x, T* y, dim_t size, const Function& func) {
+      const dim_t remaining = size % Vec<T, ISA>::width;
       size -= remaining;
 
-      for (dim_t i = 0; i < size; i += vec_width) {
-        func(i, vec_width);
+      for (dim_t i = 0; i < size; i += Vec<T, ISA>::width) {
+        auto v = Vec<T, ISA>::load(x + i);
+        Vec<T, ISA>::store(func(v), y + i);
       }
 
       if (remaining != 0) {
-        func(size, remaining);
+        auto v = Vec<T, ISA>::load(x + size, remaining);
+        Vec<T, ISA>::store(func(v), y + size, remaining);
       }
-    }
-
-    template <CpuIsa ISA, typename T, typename Function>
-    static void vectorized_unary_transform(const T* x, T* y, dim_t size, const Function& func) {
-      vectorized_iter<Vec<T, ISA>::width>(size,
-                                          [x, y, &func](dim_t i, dim_t width) {
-                                            auto v = Vec<T, ISA>::load(x + i, width);
-                                            Vec<T, ISA>::store(func(v), y + i, width);
-                                          });
     }
 
     template <CpuIsa ISA, typename T, typename Function>
@@ -45,12 +41,20 @@ namespace ctranslate2 {
                                             T* c,
                                             dim_t size,
                                             const Function& func) {
-      vectorized_iter<Vec<T, ISA>::width>(size,
-                                          [a, b, c, &func](dim_t i, dim_t width) {
-                                            auto v1 = Vec<T, ISA>::load(a + i, width);
-                                            auto v2 = Vec<T, ISA>::load(b + i, width);
-                                            Vec<T, ISA>::store(func(v1, v2), c + i, width);
-                                          });
+      const dim_t remaining = size % Vec<T, ISA>::width;
+      size -= remaining;
+
+      for (dim_t i = 0; i < size; i += Vec<T, ISA>::width) {
+        auto v1 = Vec<T, ISA>::load(a + i);
+        auto v2 = Vec<T, ISA>::load(b + i);
+        Vec<T, ISA>::store(func(v1, v2), c + i);
+      }
+
+      if (remaining != 0) {
+        auto v1 = Vec<T, ISA>::load(a + size, remaining);
+        auto v2 = Vec<T, ISA>::load(b + size, remaining);
+        Vec<T, ISA>::store(func(v1, v2), c + size, remaining);
+      }
     }
 
     struct identity {
@@ -81,23 +85,32 @@ namespace ctranslate2 {
         return accu;
       }
 
+      const dim_t remaining = size % Vec<T, ISA>::width;
+      size -= remaining;
+
       auto vec_accu = Vec<T, ISA>::load(init);
-      vectorized_iter<Vec<T, ISA>::width>(
-        size,
-        [x, init, &vec_accu, &vec_map_func, &vec_reduce_func](dim_t i, dim_t width) {
-          auto v = Vec<T, ISA>::load(x + i, width, init);
-          vec_accu = vec_reduce_func(vec_accu, vec_map_func(v));
-        });
+      for (dim_t i = 0; i < size; i += Vec<T, ISA>::width) {
+        auto v = Vec<T, ISA>::load(x + i, Vec<T, ISA>::width, init);
+        vec_accu = vec_reduce_func(vec_accu, vec_map_func(v));
+      }
 
       T values[Vec<T, ISA>::width];
       Vec<T, ISA>::store(vec_accu, values);
-      return vectorized_map_reduce_all<ISA>(values,
-                                            Vec<T, ISA>::width,
-                                            init,
-                                            identity(),
-                                            vec_reduce_func,
-                                            identity(),
-                                            scalar_reduce_func);
+      const auto accu =  vectorized_map_reduce_all<ISA>(values,
+                                                        Vec<T, ISA>::width,
+                                                        init,
+                                                        identity(),
+                                                        vec_reduce_func,
+                                                        identity(),
+                                                        scalar_reduce_func);
+
+      return  vectorized_map_reduce_all<ISA>(x + size,
+                                             remaining,
+                                             accu,
+                                             vec_map_func,
+                                             vec_reduce_func,
+                                             scalar_map_func,
+                                             scalar_reduce_func);
     }
 
     template <CpuIsa ISA, typename T, typename VecReduceFunc, typename ScalarReduceFunc>

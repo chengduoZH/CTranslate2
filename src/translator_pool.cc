@@ -20,49 +20,77 @@ namespace ctranslate2 {
       worker.join();
   }
 
-  std::future<TranslationOutput> TranslatorPool::post(TranslationInput source,
-                                                      TranslationOptions options,
-                                                      bool blocking) {
-    return post(std::move(source), TranslationInput(), std::move(options), blocking);
+  std::future<std::vector<TranslationResult>>
+  TranslatorPool::translate_batch_async(std::vector<std::vector<std::string>> source,
+                                        TranslationOptions options) {
+    return post(std::move(source), std::move(options));
   }
 
-  std::future<TranslationOutput> TranslatorPool::post(TranslationInput source,
-                                                      TranslationInput target_prefix,
-                                                      TranslationOptions options,
-                                                      bool blocking) {
+  std::future<std::vector<TranslationResult>>
+  TranslatorPool::translate_batch_async(std::vector<std::vector<std::string>> source,
+                                        std::vector<std::vector<std::string>> target_prefix,
+                                        TranslationOptions options) {
+    return post(std::move(source), std::move(target_prefix), std::move(options));
+  }
+
+  std::future<std::vector<TranslationResult>>
+  TranslatorPool::post(std::vector<std::vector<std::string>> source,
+                       TranslationOptions options,
+                       bool throttle) {
+    return post(std::move(source),
+                std::vector<std::vector<std::string>>(),
+                std::move(options),
+                throttle);
+  }
+
+  std::future<std::vector<TranslationResult>>
+  TranslatorPool::post(std::vector<std::vector<std::string>> source,
+                       std::vector<std::vector<std::string>> target_prefix,
+                       TranslationOptions options,
+                       bool throttle) {
+    auto* job = new TranslationJob(std::move(source),
+                                   std::move(target_prefix),
+                                   std::move(options));
+    auto future = job->get_future();
+    post_job(std::unique_ptr<Job>(job), throttle);
+    return future;
+  }
+
+  void TranslatorPool::post_job(std::unique_ptr<Job> job, bool throttle) {
     std::unique_lock<std::mutex> lock(_mutex);
-    if (blocking)
+    if (throttle)
       _can_add_more_work.wait(lock, [this]{ return _work.size() < 2 * _workers.size(); });
 
     // locked again here
 
-    _work.emplace(std::piecewise_construct,
-                  std::forward_as_tuple(std::move(source),
-                                        std::move(target_prefix),
-                                        std::move(options)),
-                  std::forward_as_tuple());
-
-    std::future<TranslationOutput> future = _work.back().second.get_future();
+    _work.emplace(std::move(job));
 
     lock.unlock();
     _cv.notify_one();
-    return future;
   }
 
-  TranslationOutput TranslatorPool::translate_batch(const TranslationInput& source,
-                                                    const TranslationInput& target_prefix,
-                                                    TranslationOptions options) {
+  std::vector<TranslationResult>
+  TranslatorPool::translate_batch(const std::vector<std::vector<std::string>>& source,
+                                  const TranslationOptions& options) {
+    return translate_batch(source, std::vector<std::vector<std::string>>(), options);
+  }
+
+  std::vector<TranslationResult>
+  TranslatorPool::translate_batch(const std::vector<std::vector<std::string>>& source,
+                                  const std::vector<std::vector<std::string>>& target_prefix,
+                                  const TranslationOptions& user_options) {
+    TranslationOptions options = user_options;
     options.validate();
     options.validated = true;
 
     if (source.empty())
-      return TranslationOutput();
+      return std::vector<TranslationResult>();
 
     // Rebatch the input and post each sub-batch in the translation queue.
     auto batches = rebatch_input(source, target_prefix, options);
     options.rebatch_input = false;
 
-    std::vector<std::future<TranslationOutput>> futures;
+    std::vector<std::future<std::vector<TranslationResult>>> futures;
     futures.reserve(batches.size());
     for (auto& batch : batches) {
       futures.emplace_back(post(std::move(batch.source),
@@ -71,7 +99,7 @@ namespace ctranslate2 {
     }
 
     const TranslationResult empty_result(options.num_hypotheses, options.return_attention);
-    TranslationOutput results(source.size(), empty_result);
+    std::vector<TranslationResult> results(source.size(), empty_result);
 
     // Wait for the result of each sub-batch.
     for (size_t batch_id = 0; batch_id < batches.size(); ++batch_id) {
@@ -141,30 +169,39 @@ namespace ctranslate2 {
 
       if (_request_end) {
         lock.unlock();
+        // The CUDA context is destroyed when the thread exits, so we clear the translation
+        // resources now when the CUDA context is still active.
+        translator.detach_model();
         break;
       }
 
-      auto work_def = std::move(_work.front());
+      auto job = std::move(_work.front());
       _work.pop();
       lock.unlock();
 
       _can_add_more_work.notify_one();
 
-      const auto& job = work_def.first;
-      auto& promise = work_def.second;
+      job->run(translator);
+    }
+  }
+
+  template <typename OutputType>
+  void TranslatorPool::BaseJob<OutputType>::run(Translator& translator) {
+    try {
+      _promise.set_value(compute(translator));
+    } catch (...) {
       try {
-        promise.set_value(translator.translate_batch_with_prefix(job.source,
-                                                                 job.target_prefix,
-                                                                 job.options));
+        // Store the exception in the shared state so that future.get() will throw it.
+        _promise.set_exception(std::current_exception());
       } catch (...) {
-        try {
-          // Store the exception in the shared state so that future.get() will throw it.
-          promise.set_exception(std::current_exception());
-        } catch (...) {
-          // set_exception may throw too.
-        }
+        // set_exception may throw too.
       }
     }
+  }
+
+  std::vector<TranslationResult>
+  TranslatorPool::TranslationJob::compute(Translator& translator) const {
+    return translator.translate_batch_with_prefix(_source, _target_prefix, _options);
   }
 
   void TranslatorPool::open_input_file(const std::string& file, std::ifstream& stream) const {

@@ -51,23 +51,37 @@ namespace ctranslate2 {
         return "MKL";
       case GemmBackend::DNNL:
         return "DNNL";
+      case GemmBackend::ACCELERATE:
+        return "Accelerate";
+      case GemmBackend::OPENBLAS:
+        return "OpenBLAS";
       default:
         return "NONE";
       }
     }
 
     GemmBackend get_gemm_backend(ComputeType compute_type) {
-#ifdef CT2_WITH_DNNL
-      if (!mayiuse_mkl()) {
-        if (compute_type != ComputeType::INT16)
-          return GemmBackend::DNNL;
-        else
-          return GemmBackend::NONE;
+#ifdef CT2_WITH_MKL
+      if (mayiuse_mkl() && (compute_type == ComputeType::FLOAT || mkl_has_fast_int_gemm())) {
+        return GemmBackend::MKL;
       }
 #endif
-#ifdef CT2_WITH_MKL
-      if (compute_type == ComputeType::FLOAT || mkl_has_fast_int_gemm()) {
-        return GemmBackend::MKL;
+
+#ifdef CT2_WITH_DNNL
+      if (compute_type != ComputeType::INT16) {
+        return GemmBackend::DNNL;
+      }
+#endif
+
+#ifdef CT2_WITH_ACCELERATE
+      if (compute_type == ComputeType::FLOAT) {
+        return GemmBackend::ACCELERATE;
+      }
+#endif
+
+#ifdef CT2_WITH_OPENBLAS
+      if (compute_type == ComputeType::FLOAT) {
+        return GemmBackend::OPENBLAS;
       }
 #endif
 
